@@ -111,8 +111,7 @@ void accept_request(void *cli) {
             numchars = get_line(client, buf, sizeof(buf));
         not_found(client);
     }
-    else
-    {
+    else {
         if ((st.st_mode & S_IFMT) == S_IFDIR) {
             //getcwd(path, sizeof(path));
             strcat(path, "/index.html");
@@ -157,11 +156,11 @@ void bad_request(int client) {
  *             FILE pointer for the file to cat */
 /**********************************************************************/
 void cat(int client, FILE *resource) {
-    fseek(resource, 0, SEEK_END);
     off_t len = 0;
     #if __APPLE__
         sendfile(fileno(resource), client, 0, &len, &hdtr, 0);
     #else
+        fseek(resource, 0, SEEK_END);
         off_t file_size = ftell(resource);
         rewind(resource);
         sendfile(client, fileno(resource), &len, file_size);
