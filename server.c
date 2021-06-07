@@ -26,7 +26,7 @@
 
 #define ISspace(x) isspace((int)(x))
 
-#define SERVER_STRING "Server: tinyhttpd edited by fumiama/0.1.0\r\n"
+#define SERVER_STRING "Server: TinyHttpd modified by Fumiama/1.0\r\n"
 
 void accept_request(void *);
 void bad_request(int);
@@ -440,11 +440,11 @@ void serve_file(int client, const char *filename) {
  * Returns: the socket */
 /**********************************************************************/
 #ifdef LISTEN_ON_IPV6
-static socklen_t struct_len = sizeof(struct sockaddr_in6);
-static struct sockaddr_in6 name;
+    static socklen_t struct_len = sizeof(struct sockaddr_in6);
+    static struct sockaddr_in6 name;
 #else
-static socklen_t struct_len = sizeof(struct sockaddr_in);
-static struct sockaddr_in name;
+    static socklen_t struct_len = sizeof(struct sockaddr_in);
+    static struct sockaddr_in name;
 #endif
 
 int startup(u_short *port) {
