@@ -22,6 +22,8 @@
 
 #if !__APPLE__
     #include <sys/sendfile.h> 
+#else
+    struct sf_hdtr hdtr;
 #endif
 
 #define ISspace(x) isspace((int)(x))
@@ -154,7 +156,6 @@ void bad_request(int client) {
  * Parameters: the client socket descriptor
  *             FILE pointer for the file to cat */
 /**********************************************************************/
-struct sf_hdtr hdtr;
 void cat(int client, FILE *resource) {
     fseek(resource, 0, SEEK_END);
     off_t len = 0;
