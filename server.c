@@ -120,10 +120,8 @@ void accept_request(void *cli) {
             (st.st_mode & S_IXGRP) ||
             (st.st_mode & S_IXOTH))
             cgi = 1;
-        if (!cgi)
-            serve_file(client, path);
-        else
-            execute_cgi(client, path, method, query_string);
+        if (!cgi) serve_file(client, path);
+        else execute_cgi(client, path, method, query_string);
     }
 
     close(client);
@@ -293,10 +291,11 @@ void execute_cgi(int client, const char *path, const char *method, const char *q
 /**********************************************************************/
 off_t get_file_size(const char *filepath) {
     struct stat statbuf;
-    if (stat(filepath, &statbuf) == 0)
+    if (stat(filepath, &statbuf) == 0) {
+        printf("file size: %u\n", statbuf.st_size);
         return statbuf.st_size;
-    else
-        return -1;
+    }
+    else return -1;
 }
 
 /**********************************************************************/
