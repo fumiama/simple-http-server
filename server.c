@@ -255,13 +255,11 @@ void execute_cgi(int client, const char *path, const char *method, const char *q
             sprintf(query_env, "QUERY_STRING=%s", query_string);
             putenv(query_env);
         }
-        else
-        { /* POST */
+        else { /* POST */
             sprintf(length_env, "CONTENT_LENGTH=%d", content_length);
             putenv(length_env);
         }
-        //if(strcmp(path, "./sockjs-node/info") == 0) execl("cat", "./sockjs-node/info.json", 0);
-        execl(path, path, NULL);
+        execl(path, path, method, query_string, NULL);
         exit(0);
     }
     else { /* parent */
@@ -272,8 +270,7 @@ void execute_cgi(int client, const char *path, const char *method, const char *q
                 recv(client, &c, 1, 0);
                 write(cgi_input[1], &c, 1);
             }
-        while (read(cgi_output[0], &c, 1) > 0)
-            send(client, &c, 1, 0);
+        while (read(cgi_output[0], &c, 1) > 0) send(client, &c, 1, 0);
 
         close(cgi_output[0]);
         close(cgi_input[1]);
