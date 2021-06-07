@@ -73,8 +73,7 @@ void accept_request(void *cli) {
         return;
     }
 
-    if (strcasecmp(method, "POST") == 0)
-        cgi = 1;
+    if (strcasecmp(method, "POST") == 0) cgi = 1;
 
     i = 0;
     while (ISspace(buf[j]) && (j < sizeof(buf)))
@@ -155,8 +154,7 @@ void cat(int client, FILE *resource) {
     char buf[1024];
     size_t size = 0;
 
-    while ((size = fread(buf, sizeof(char), 1024, resource)))
-        send(client, buf, size, 0);
+    while ((size = fread(buf, sizeof(char), 1024, resource))) send(client, buf, size, 0);
 }
 
 /**********************************************************************/
@@ -360,11 +358,9 @@ void headers(int client, const char *filepath) {
     uint offset = 0;
     uint extpos = strlen(filepath) - 4;
 
-    ADD_HERDER(HTTP200);
-    ADD_HERDER(SERVER_STRING);
+    ADD_HERDER(HTTP200 SERVER_STRING);
     ADD_HERDER_PARAM(CONTENT_TYPE, EXTNM_IS_NOT("html")?(EXTNM_IS_NOT(".css")?"text/plain":"text/css"):"text/html");
-    ADD_HERDER_PARAM(CONTENT_LEN, get_file_size(filepath));
-    ADD_HERDER("\r\n");
+    ADD_HERDER_PARAM(CONTENT_LEN "\r\n", get_file_size(filepath));
     send(client, buf, offset, 0);
 }
 
