@@ -206,7 +206,6 @@ void execute_cgi(int client, const char *path, const char *method, const char *q
     pid_t pid;
     int status;
     int i;
-    char c;
     int numchars = 1;
     int content_length = -1;
 
@@ -273,11 +272,15 @@ void execute_cgi(int client, const char *path, const char *method, const char *q
         close(cgi_output[1]);
         close(cgi_input[0]);
         if (strcasecmp(method, "POST") == 0)
-            for (i = 0; i < content_length; i++) {
-                recv(client, &c, 1, 0);
-                write(cgi_input[1], &c, 1);
+            for (i = 0; i < content_length;) {
+                int cnt = recv(client, buf, 1024, 0);
+                if(cnt > 0) {
+                    write(cgi_input[1], buf, cnt);
+                    i += cnt;
+                }
             }
-        while (read(cgi_output[0], &c, 1) > 0) send(client, &c, 1, 0);
+        int cnt = 0;
+        while ((cnt = read(cgi_output[0], buf, 1024)) > 0) send(client, buf, cnt, 0);
 
         close(cgi_output[0]);
         close(cgi_input[1]);
