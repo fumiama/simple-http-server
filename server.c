@@ -20,6 +20,10 @@
 #include <stdlib.h>
 #include <pthread.h>
 
+#if !__APPLE__
+    #include <sys/sendfile.h> 
+#endif
+
 #define ISspace(x) isspace((int)(x))
 
 #define SERVER_STRING "Server: tinyhttpd edited by fumiama/0.1.0\r\n"
@@ -150,11 +154,18 @@ void bad_request(int client) {
  * Parameters: the client socket descriptor
  *             FILE pointer for the file to cat */
 /**********************************************************************/
+struct sf_hdtr hdtr;
 void cat(int client, FILE *resource) {
-    char buf[1024];
-    size_t size = 0;
-
-    while ((size = fread(buf, sizeof(char), 1024, resource))) send(client, buf, size, 0);
+    fseek(resource, 0, SEEK_END);
+    off_t len = 0;
+    #if __APPLE__
+        sendfile(fileno(resource), client, 0, &len, &hdtr, 0);
+    #else
+        off_t file_size = ftell(resource);
+        rewind(resource);
+        sendfile(client, fileno(resource), &len, file_size);
+    #endif
+    printf("Send %u bytes.\n", len);
 }
 
 /**********************************************************************/
@@ -412,10 +423,8 @@ void serve_file(int client, const char *filename) {
         numchars = get_line(client, buf, sizeof(buf));
 
     resource = fopen(filename, "rb");
-    if (resource == NULL)
-        not_found(client);
-    else
-    {
+    if (resource == NULL) not_found(client);
+    else {
         headers(client, filename);
         cat(client, resource);
     }
