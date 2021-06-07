@@ -290,18 +290,19 @@ void execute_cgi(int client, const char *path, const char *method, const char *q
 /* Parameters: path of the file */
 /**********************************************************************/
 off_t get_file_size(const char *filepath) {
-    struct stat statbuf;
-    if (stat(filepath, &statbuf) == 0) {
-        printf("file size: %lu\n", statbuf.st_size);
-        if(statbuf.st_size == 0) {
-            FILE* fp = fopen(filepath, "ab+");
-            off_t sz = ftell(fp);
-            printf("ftell size: %lu\n", sz);
-            return sz;
-        }
-        return statbuf.st_size;
+    struct stat *statbuf = malloc(sizeof(struct stat));
+    off_t sz;
+    if (stat(filepath, statbuf) == 0) {
+        sz = statbuf->st_size;
+        printf("file size: %lu\n", sz);
+        free(statbuf);
+        return sz;
     }
-    else return -1;
+    else {
+        free(statbuf);
+        error_die("stat");
+        return -1;
+    }
 }
 
 /**********************************************************************/
@@ -375,7 +376,7 @@ void headers(int client, const char *filepath) {
     uint extpos = strlen(filepath) - 4;
 
     ADD_HERDER(HTTP200 SERVER_STRING);
-    ADD_HERDER_PARAM(CONTENT_TYPE, EXTNM_IS_NOT("html")?(EXTNM_IS_NOT(".css")?"text/plain":"text/css"):"text/html");
+    ADD_HERDER_PARAM(CONTENT_TYPE, EXTNM_IS_NOT("html")?(EXTNM_IS_NOT(".css")?(EXTNM_IS_NOT("ico")?"text/plain":"image/x-icon"):"text/css"):"text/html");
     ADD_HERDER_PARAM(CONTENT_LEN "\r\n", get_file_size(filepath));
     send(client, buf, offset, 0);
 }
