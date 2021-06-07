@@ -32,6 +32,7 @@ void error_die(const char *);
 void execute_cgi(int, const char *, const char *, const char *);
 off_t get_file_size(const char *);
 int get_line(int, char *, int);
+void handle_quit(int);
 void headers(int, const char *);
 void not_found(int);
 void serve_file(int, const char *);
@@ -334,6 +335,14 @@ int get_line(int sock, char *buf, int size) {
 }
 
 /**********************************************************************/
+/* Handle thread quit signal
+/**********************************************************************/
+void handle_quit(int signo) {
+    perror("handle");
+    pthread_exit(NULL);
+}
+
+/**********************************************************************/
 /* Return the informational HTTP headers about a file. */
 /* Parameters: the socket to print the headers on
  *             the name of the file */
@@ -504,6 +513,8 @@ void unimplemented(int client) {
     while (1) {\
         client_sock = accept(server_sock, (struct sockaddr *)&client_name, &client_name_len);\
         if (client_sock == -1) break;\
+        signal(SIGQUIT, handle_quit);\
+        signal(SIGPIPE, handle_quit);\
         if (pthread_create(&newthread, NULL, accept_request, client_sock) != 0) perror("pthread_create");\
     }\
     close(client_sock);\
