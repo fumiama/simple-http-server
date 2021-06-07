@@ -293,6 +293,12 @@ off_t get_file_size(const char *filepath) {
     struct stat statbuf;
     if (stat(filepath, &statbuf) == 0) {
         printf("file size: %u\n", statbuf.st_size);
+        if(statbuf.st_size == 0) {
+            FILE* fp = fopen(filepath, "ab+");
+            off_t sz = ftell(fp);
+            printf("ftell size: %u\n", sz);
+            return sz;
+        }
         return statbuf.st_size;
     }
     else return -1;
