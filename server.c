@@ -541,6 +541,8 @@ int main(int argc, char **argv) {
         printf("httpd running on port %d\n", port);
         if(as_daemon) {
             pid = fork();
+            if(pid == 0) pid = fork();
+            else return 0;
             while (pid > 0) {      //主进程监控子进程状态，如果子进程异常终止则重启之
                 wait(NULL);
                 puts("Server subprocess exited. Restart...");
