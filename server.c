@@ -6,6 +6,8 @@
  *
  * Modified June 2021 by Fumiama(源文雨)
  */
+/* See feature_test_macros(7) */
+#define _GNU_SOURCE 1
 #include <stdio.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -21,6 +23,7 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <pthread.h>
+#include <fcntl.h>
 
 #if !__APPLE__
     #include <sys/sendfile.h> 
@@ -273,12 +276,16 @@ static void execute_cgi(int client, const char *path, const char *method, const 
         printf("cgi msg cnt: %u bytes.\n", cnt);
         if(cnt > 0) {
             int len = 0;
-            char* data = malloc(cnt);
-            while(len < cnt) {
-                len += read(cgi_output[0], data, cnt);
-                send(client, data, len, 0);
-            }
-            if(data) free(data);
+            #if __APPLE__
+                char* data = malloc(cnt);
+                while(len < cnt) {
+                    len += read(cgi_output[0], data, cnt);
+                    send(client, data, len, 0);
+                }
+                if(data) free(data);
+            #else
+                len = splice(cgi_output[0], NULL, client, NULL, cnt, SPLICE_F_GIFT);
+            #endif
             printf("cgi send %d bytes\n", len);
         }
         close(cgi_output[0]);
