@@ -23,34 +23,34 @@
 #if !__APPLE__
     #include <sys/sendfile.h> 
 #else
-    struct sf_hdtr hdtr;
+    static struct sf_hdtr hdtr;
 #endif
 
 #define ISspace(x) isspace((int)(x))
 
 #define SERVER_STRING "Server: TinyHttpd modified by Fumiama/1.0\r\n"
 
-void accept_request(void *);
-void bad_request(int);
-void cat(int, FILE *);
-void cannot_execute(int);
-void error_die(const char *);
-void execute_cgi(int, const char *, const char *, const char *);
-off_t get_file_size(const char *);
-int get_line(int, char *, int);
-void handle_quit(int);
-void headers(int, const char *);
-void not_found(int);
-void serve_file(int, const char *);
-int startup(u_short *);
-void unimplemented(int);
+static void accept_request(void *);
+static void bad_request(int);
+static void cat(int, FILE *);
+static void cannot_execute(int);
+static void error_die(const char *);
+static void execute_cgi(int, const char *, const char *, const char *);
+static off_t get_file_size(const char *, int);
+static int get_line(int, char *, int);
+static void handle_quit(int);
+static void headers(int, const char *);
+static void not_found(int);
+static void serve_file(int, const char *);
+static int startup(u_short *);
+static void unimplemented(int);
 
 /**********************************************************************/
 /* A request has caused a call to accept() on the server port to
  * return.  Process the request appropriately.
  * Parameters: the socket connected to the client */
 /**********************************************************************/
-void accept_request(void *cli) {
+static void accept_request(void *cli) {
     pthread_detach(pthread_self());
     int client = (int)cli;
     char buf[1024];
@@ -131,19 +131,9 @@ void accept_request(void *cli) {
 /* Inform the client that a request it has made has a problem.
  * Parameters: client socket */
 /**********************************************************************/
-void bad_request(int client) {
-    char buf[1024];
-
-    sprintf(buf, "HTTP/1.0 400 BAD REQUEST\r\n");
-    send(client, buf, sizeof(buf), 0);
-    sprintf(buf, "Content-Type: text/html\r\n");
-    send(client, buf, sizeof(buf), 0);
-    sprintf(buf, "\r\n");
-    send(client, buf, sizeof(buf), 0);
-    sprintf(buf, "<P>Your browser sent a bad request, ");
-    send(client, buf, sizeof(buf), 0);
-    sprintf(buf, "such as a POST without a Content-Length.\r\n");
-    send(client, buf, sizeof(buf), 0);
+#define HTTP400 "HTTP/1.0 400 BAD REQUEST\r\nContent-Type: text/html\r\n\r\n<P>Your browser sent a bad request, such as a POST without a Content-Length.\r\n"
+static void bad_request(int client) {
+    send(client, HTTP400, sizeof(HTTP400)-1, 0);
 }
 
 /**********************************************************************/
@@ -153,7 +143,7 @@ void bad_request(int client) {
  * Parameters: the client socket descriptor
  *             FILE pointer for the file to cat */
 /**********************************************************************/
-void cat(int client, FILE *resource) {
+static void cat(int client, FILE *resource) {
     off_t len = 0;
     #if __APPLE__
         sendfile(fileno(resource), client, 0, &len, &hdtr, 0);
@@ -170,17 +160,9 @@ void cat(int client, FILE *resource) {
 /* Inform the client that a CGI script could not be executed.
  * Parameter: the client socket descriptor. */
 /**********************************************************************/
-void cannot_execute(int client) {
-    char buf[1024];
-
-    sprintf(buf, "HTTP/1.0 500 Internal Server Error\r\n");
-    send(client, buf, strlen(buf), 0);
-    sprintf(buf, "Content-Type: text/html\r\n");
-    send(client, buf, strlen(buf), 0);
-    sprintf(buf, "\r\n");
-    send(client, buf, strlen(buf), 0);
-    sprintf(buf, "<P>Error prohibited CGI execution.\r\n");
-    send(client, buf, strlen(buf), 0);
+#define HTTP500 "HTTP/1.0 500 Internal Server Error\r\nContent-Type: text/html\r\n\r\n<P>Internal Server Error.\r\n"
+static void cannot_execute(int client) {
+    send(client, HTTP500, sizeof(HTTP500)-1, 0);
 }
 
 /**********************************************************************/
@@ -188,7 +170,7 @@ void cannot_execute(int client) {
  * on value of errno, which indicates system call errors) and exit the
  * program indicating an error. */
 /**********************************************************************/
-void error_die(const char *sc) {
+static void error_die(const char *sc) {
     perror(sc);
     exit(1);
 }
@@ -199,7 +181,7 @@ void error_die(const char *sc) {
  * Parameters: client socket descriptor
  *             path to the CGI script */
 /**********************************************************************/
-void execute_cgi(int client, const char *path, const char *method, const char *query_string) {
+static void execute_cgi(int client, const char *path, const char *method, const char *query_string) {
     char buf[1024];
     int cgi_output[2];
     int cgi_input[2];
@@ -292,19 +274,17 @@ void execute_cgi(int client, const char *path, const char *method, const char *q
 /* Returns the size of a file. */
 /* Parameters: path of the file */
 /**********************************************************************/
-off_t get_file_size(const char *filepath) {
-    struct stat *statbuf = malloc(sizeof(struct stat));
+static off_t get_file_size(const char *filepath, int client) {
+    struct stat statbuf;
     off_t sz;
-    if (stat(filepath, statbuf) == 0) {
-        sz = statbuf->st_size;
+    if (!stat(filepath, &statbuf)) {
+        sz = statbuf.st_size;
         printf("file size: %lu\n", sz);
-        free(statbuf);
         return sz;
     }
     else {
-        free(statbuf);
+        cannot_execute(client);
         error_die("stat");
-        return -1;
     }
 }
 
@@ -321,32 +301,26 @@ off_t get_file_size(const char *filepath) {
  *             the size of the buffer
  * Returns: the number of bytes stored (excluding null) */
 /**********************************************************************/
-int get_line(int sock, char *buf, int size) {
+static int get_line(int sock, char *buf, int size) {
     int i = 0;
-    char c = '\0';
-    int n;
-
-    while ((i < size - 1) && (c != '\n')) {
-        n = recv(sock, &c, 1, 0);
-        /* DEBUG printf("%02X\n", c); */
-        if (n > 0) {
-            if (c == '\r') {
-                n = recv(sock, &c, 1, MSG_PEEK);
-                /* DEBUG printf("%02X\n", c); */
-                if ((n > 0) && (c == '\n'))
-                    recv(sock, &c, 1, 0);
-                else
-                    c = '\n';
+    char* data = malloc(size);
+    int cnt = 0;
+    char c = 0;
+    if(!data) return 0;
+    if((cnt = recv(sock, data, size, MSG_PEEK)) > 0) {
+        for(; i < cnt && c != '\n'; i++) {
+            c = data[i];
+            if(c == '\r') {
+                if(i+1 < cnt && data[i+1] == '\n') i++;
+                c = '\n';
             }
             buf[i] = c;
-            i++;
         }
-        else
-            c = '\n';
+        buf[i] = 0;
+        recv(sock, data, i, 0);
     }
-    buf[i] = '\0';
-
-    return (i);
+    free(data);
+    return i;
 }
 
 /**********************************************************************/
@@ -380,38 +354,16 @@ void headers(int client, const char *filepath) {
 
     ADD_HERDER(HTTP200 SERVER_STRING);
     ADD_HERDER_PARAM(CONTENT_TYPE, EXTNM_IS_NOT("html")?(EXTNM_IS_NOT(".css")?(EXTNM_IS_NOT("ico")?"text/plain":"image/x-icon"):"text/css"):"text/html");
-    ADD_HERDER_PARAM(CONTENT_LEN "\r\n", get_file_size(filepath));
+    ADD_HERDER_PARAM(CONTENT_LEN "\r\n", get_file_size(filepath, client));
     send(client, buf, offset, 0);
 }
 
 /**********************************************************************/
 /* Give a client a 404 not found status message. */
 /**********************************************************************/
+#define HTTP404 "HTTP/1.0 404 NOT FOUND\r\n" SERVER_STRING "Content-Type: text/html\r\n\r\n<HTML><TITLE>Not Found</TITLE>\r\n<BODY><P>The server could not fulfill\r\nyour request because the resource specified\r\nis unavailable or nonexistent.\r\n</BODY></HTML>\r\n"
 void not_found(int client) {
-    char buf[1024];
-
-    sprintf(buf, "HTTP/1.0 404 NOT FOUND\r\n");
-    send(client, buf, strlen(buf), 0);
-    sprintf(buf, SERVER_STRING);
-    send(client, buf, strlen(buf), 0);
-    sprintf(buf, "Content-Type: text/html\r\n");
-    send(client, buf, strlen(buf), 0);
-    sprintf(buf, "\r\n");
-    send(client, buf, strlen(buf), 0);
-    sprintf(buf, "<HTML><TITLE>Not Found</TITLE>\r\n");
-    send(client, buf, strlen(buf), 0);
-    sprintf(buf, "<BODY><P>The server could not fulfill\r\n");
-    send(client, buf, strlen(buf), 0);
-    sprintf(buf, "your request because the resource specified\r\n");
-    send(client, buf, strlen(buf), 0);
-    sprintf(buf, "is unavailable or nonexistent.\r\n");
-    send(client, buf, strlen(buf), 0);
-    //FILE *fp = popen("ps -Z", "r");
-    //fread(buf, sizeof(buf), 1, fp);
-    //fclose(fp);
-    //send(client, buf, strlen(buf), 0);
-    sprintf(buf, "</BODY></HTML>\r\n");
-    send(client, buf, strlen(buf), 0);
+    send(client, HTTP404, sizeof(HTTP404)-1, 0);
 }
 
 /**********************************************************************/
@@ -495,25 +447,9 @@ int startup(u_short *port) {
  * implemented.
  * Parameter: the client socket */
 /**********************************************************************/
+#define HTTP501 "HTTP/1.0 501 Method Not Implemented\r\n" SERVER_STRING "Content-Type: text/html\r\n\r\n<HTML><HEAD><TITLE>Method Not Implemented\r\n</TITLE></HEAD>\r\n<BODY><P>HTTP request method not supported.\r\n</BODY></HTML>\r\n"
 void unimplemented(int client) {
-    char buf[1024];
-
-    sprintf(buf, "HTTP/1.0 501 Method Not Implemented\r\n");
-    send(client, buf, strlen(buf), 0);
-    sprintf(buf, SERVER_STRING);
-    send(client, buf, strlen(buf), 0);
-    sprintf(buf, "Content-Type: text/html\r\n");
-    send(client, buf, strlen(buf), 0);
-    sprintf(buf, "\r\n");
-    send(client, buf, strlen(buf), 0);
-    sprintf(buf, "<HTML><HEAD><TITLE>Method Not Implemented\r\n");
-    send(client, buf, strlen(buf), 0);
-    sprintf(buf, "</TITLE></HEAD>\r\n");
-    send(client, buf, strlen(buf), 0);
-    sprintf(buf, "<BODY><P>HTTP request method not supported.\r\n");
-    send(client, buf, strlen(buf), 0);
-    sprintf(buf, "</BODY></HTML>\r\n");
-    send(client, buf, strlen(buf), 0);
+    send(client, HTTP501, sizeof(HTTP501)-1, 0);
 }
 
 /**********************************************************************/
