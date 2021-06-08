@@ -272,8 +272,8 @@ static void execute_cgi(int client, const char *path, const char *method, const 
             if(cnt > 0) {
                 loff_t len = 0;
                 loff_t offin = 0;
-                splice(cgi_output[0], &offin, client, &len, cnt, SPLICE_F_GIFT);
-                printf("cgi send %ld bytes\n", len);
+                splice(cgi_output[0], &offin, client, &len, (size_t)cnt, SPLICE_F_GIFT);
+                printf("cgi send %d bytes\n", len);
             }
         } else cannot_execute(client);
         close(cgi_output[0]);
