@@ -6,6 +6,8 @@
  *
  * Modified June 2021 by Fumiama(源文雨)
  */
+/* See feature_test_macros(7) */
+#define _GNU_SOURCE 1
 #include <stdio.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -20,6 +22,7 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include <stdlib.h>
+#include <fcntl.h>
 #include <pthread.h>
 
 #if !__APPLE__
@@ -267,13 +270,10 @@ static void execute_cgi(int client, const char *path, const char *method, const 
         if(read(cgi_output[0], (char*)&cnt, sizeof(uint32_t)) > 0) {
             printf("cgi msg cnt: %u bytes.\n", cnt);
             if(cnt > 0) {
-                int len = 0;
-                #if __APPLE__
-                    sendfile(cgi_output[0], client, 0, &len, &hdtr, 0);
-                #else
-                    sendfile(client, cgi_output[0], &len, cnt);
-                #endif
-                printf("cgi send %d bytes\n", len);
+                loff_t len = 0;
+                loff_t offin = 0;
+                splice(cgi_output[0], &offin, client, &len, cnt, SPLICE_F_GIFT);
+                printf("cgi send %ld bytes\n", len);
             }
         } else cannot_execute(client);
         close(cgi_output[0]);
