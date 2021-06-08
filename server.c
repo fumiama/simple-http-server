@@ -263,8 +263,16 @@ static void execute_cgi(int client, const char *path, const char *method, const 
                     i += cnt;
                 }
             }
-        int cnt = 0;
-        while ((cnt = read(cgi_output[0], buf, 1024)) > 0) send(client, buf, cnt, 0);
+        uint32_t cnt = 0;
+        read(cgi_output[0], (char*)&cnt, sizeof(uint32_t));
+        if(cnt > 0) {
+            int len = 0;
+            #if __APPLE__
+                sendfile(cgi_output[0], client, 0, &len, &hdtr, 0);
+            #else
+                sendfile(client, cgi_output[0], &len, cnt);
+            #endif
+        }
 
         close(cgi_output[0]);
         close(cgi_input[1]);
