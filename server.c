@@ -44,7 +44,7 @@ static void handle_quit(int);
 static void headers(int, const char *);
 static void not_found(int);
 static void serve_file(int, const char *);
-static int startup(u_short *);
+static int startup(u_int16_t *);
 static void unimplemented(int);
 
 /**********************************************************************/
@@ -155,7 +155,7 @@ static void cat(int client, FILE *resource) {
         rewind(resource);
         sendfile(client, fileno(resource), &len, file_size);
     #endif
-    printf("Send %u bytes.\n", len);
+    printf("Send %lu bytes.\n", len);
 }
 
 /**********************************************************************/
@@ -264,19 +264,23 @@ static void execute_cgi(int client, const char *path, const char *method, const 
                 }
             }
         uint32_t cnt = 0;
-        if(read(cgi_output[0], (char*)&cnt, sizeof(uint32_t)) > 0) {
-            printf("cgi msg cnt: %u bytes.\n", cnt);
-            if(cnt > 0) {
-                int len = 0;
-                char* data = malloc(cnt);
-                while(len < cnt) {
-                    len += read(cgi_output[0], data, cnt);
-                    send(client, data, len, 0);
-                }
-                if(data) free(data);
-                printf("cgi send %d bytes\n", len);
+        char* p = (char*)&cnt;
+        while(p - (char*)&cnt < sizeof(uint32_t)) {
+            int offset = read(cgi_output[0], p, sizeof(uint32_t));
+            if(offset > 0) p += offset;
+            else cannot_execute(client);
+        }
+        printf("cgi msg cnt: %u bytes.\n", cnt);
+        if(cnt > 0) {
+            int len = 0;
+            char* data = malloc(cnt);
+            while(len < cnt) {
+                len += read(cgi_output[0], data, cnt);
+                send(client, data, len, 0);
             }
-        } else cannot_execute(client);
+            if(data) free(data);
+            printf("cgi send %d bytes\n", len);
+        }
         close(cgi_output[0]);
         close(cgi_input[1]);
         waitpid(pid, &status, 0);
@@ -366,8 +370,8 @@ static void handle_quit(int signo) {
 #define CONTENT_LEN "Content-Length: %d\r\n"
 static void headers(int client, const char *filepath) {
     char buf[1024];
-    uint offset = 0;
-    uint extpos = strlen(filepath) - 4;
+    uint32_t offset = 0;
+    uint32_t extpos = strlen(filepath) - 4;
 
     ADD_HERDER(HTTP200 SERVER_STRING);
     ADD_HERDER_PARAM(CONTENT_TYPE, EXTNM_IS_NOT("html")?(EXTNM_IS_NOT(".css")?(EXTNM_IS_NOT("ico")?"text/plain":"image/x-icon"):"text/css"):"text/html");
@@ -425,7 +429,7 @@ static void serve_file(int client, const char *filename) {
     static struct sockaddr_in name;
 #endif
 
-static int startup(u_short *port) {
+static int startup(uint16_t *port) {
     int httpd = 0;
 
 #ifdef LISTEN_ON_IPV6
@@ -490,7 +494,7 @@ int main(int argc, char **argv) {
     else {
         int as_daemon = *(uint16_t*)argv[1] == *(uint16_t*)"-d";
         int server_sock = -1;
-        u_short port = (u_short)atoi(argv[as_daemon?2:1]);
+        uint16_t port = (uint16_t)atoi(argv[as_daemon?2:1]);
         int client_sock = -1;
         int pid = -1;
         struct sockaddr_in client_name;
