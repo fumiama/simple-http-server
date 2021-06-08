@@ -38,7 +38,7 @@ static void cat(int, FILE *);
 static void cannot_execute(int);
 static void error_die(const char *);
 static void execute_cgi(int, const char *, const char *, const char *);
-static off_t get_file_size(const char *, int);
+static uint32_t get_file_size(const char *, int);
 static int get_line(int, char *, int);
 static void handle_quit(int);
 static void headers(int, const char *);
@@ -287,12 +287,12 @@ static void execute_cgi(int client, const char *path, const char *method, const 
 /* Returns the size of a file. */
 /* Parameters: path of the file */
 /**********************************************************************/
-static off_t get_file_size(const char *filepath, int client) {
+static uint32_t get_file_size(const char *filepath, int client) {
     struct stat statbuf;
-    off_t sz;
+    uint32_t sz;
     if (!stat(filepath, &statbuf)) {
         sz = statbuf.st_size;
-        printf("file size: %lu\n", sz);
+        printf("file size: %u\n", sz);
         return sz;
     }
     else {
