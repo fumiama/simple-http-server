@@ -284,7 +284,15 @@ static void execute_cgi(int client, const char *path, const char *method, const 
                 }
                 if(data) free(data);
             #else
-                len = splice(cgi_output[0], NULL, client, NULL, cnt, SPLICE_F_GIFT);
+                while(len < cnt) {
+                    int delta = splice(cgi_output[0], NULL, client, NULL, cnt - len, SPLICE_F_GIFT);
+                    if(delta < 0) {
+                        cannot_execute(client);
+                        break;
+                    }
+                    len += delta;
+                }
+                
             #endif
             printf("cgi send %d bytes\n", len);
         }
