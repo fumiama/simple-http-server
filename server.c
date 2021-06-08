@@ -6,8 +6,6 @@
  *
  * Modified June 2021 by Fumiama(源文雨)
  */
-/* See feature_test_macros(7) */
-#define _GNU_SOURCE 1
 #include <stdio.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -22,7 +20,6 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include <stdlib.h>
-#include <fcntl.h>
 #include <pthread.h>
 
 #if !__APPLE__
@@ -270,9 +267,13 @@ static void execute_cgi(int client, const char *path, const char *method, const 
         if(read(cgi_output[0], (char*)&cnt, sizeof(uint32_t)) > 0) {
             printf("cgi msg cnt: %u bytes.\n", cnt);
             if(cnt > 0) {
-                loff_t len = 0;
-                loff_t offin = 0;
-                splice(cgi_output[0], &offin, client, &len, (size_t)cnt, SPLICE_F_GIFT);
+                int len = 0;
+                char* data = malloc(cnt);
+                while(len < cnt) {
+                    len += read(cgi_output[0], data, cnt);
+                    send(client, data, len, 0);
+                }
+                if(data) free(data);
                 printf("cgi send %d bytes\n", len);
             }
         } else cannot_execute(client);
@@ -315,30 +316,34 @@ static off_t get_file_size(const char *filepath, int client) {
 /**********************************************************************/
 static int get_line(int sock, char *buf, int size) {
     int i = 0;
-    char* data = malloc(size);
-    int cnt = 0;
-    char c = 0;
-    if(!data) return 0;
-    if((cnt = recv(sock, data, size, MSG_PEEK)) > 0) {
-        for(; i < cnt && c != '\n'; i++) {
-            c = data[i];
-            if(c == '\r') {
-                if(i+1 < cnt && data[i+1] == '\n') i++;
-                c = '\n';
+    char c = '\0';
+    int n;
+
+    while ((i < size - 1) && (c != '\n')) {
+        n = recv(sock, &c, 1, 0);
+        /* DEBUG printf("%02X\n", c); */
+        if (n > 0) {
+            if (c == '\r') {
+                n = recv(sock, &c, 1, MSG_PEEK);
+                /* DEBUG printf("%02X\n", c); */
+                if ((n > 0) && (c == '\n'))
+                    recv(sock, &c, 1, 0);
+                else c = '\n';
             }
             buf[i] = c;
+            i++;
         }
-        buf[i] = 0;
-        recv(sock, data, i, 0);
+        else c = '\n';
     }
-    free(data);
-    return i;
+    buf[i] = '\0';
+
+    return (i);
 }
 
 /**********************************************************************/
 /* Handle thread quit signal
 /**********************************************************************/
-void handle_quit(int signo) {
+static void handle_quit(int signo) {
     perror("handle");
     pthread_exit(NULL);
 }
@@ -359,7 +364,7 @@ void handle_quit(int signo) {
 #define HTTP200 "HTTP/1.0 200 OK\r\n"
 #define CONTENT_TYPE "Content-Type: %s\r\n"
 #define CONTENT_LEN "Content-Length: %d\r\n"
-void headers(int client, const char *filepath) {
+static void headers(int client, const char *filepath) {
     char buf[1024];
     uint offset = 0;
     uint extpos = strlen(filepath) - 4;
@@ -374,7 +379,7 @@ void headers(int client, const char *filepath) {
 /* Give a client a 404 not found status message. */
 /**********************************************************************/
 #define HTTP404 "HTTP/1.0 404 NOT FOUND\r\n" SERVER_STRING "Content-Type: text/html\r\n\r\n<HTML><TITLE>Not Found</TITLE>\r\n<BODY><P>The server could not fulfill\r\nyour request because the resource specified\r\nis unavailable or nonexistent.\r\n</BODY></HTML>\r\n"
-void not_found(int client) {
+static void not_found(int client) {
     send(client, HTTP404, sizeof(HTTP404)-1, 0);
 }
 
@@ -385,7 +390,7 @@ void not_found(int client) {
  *              file descriptor
  *             the name of the file to serve */
 /**********************************************************************/
-void serve_file(int client, const char *filename) {
+static void serve_file(int client, const char *filename) {
     FILE *resource = NULL;
     int numchars = 1;
     char buf[1024];
@@ -420,7 +425,7 @@ void serve_file(int client, const char *filename) {
     static struct sockaddr_in name;
 #endif
 
-int startup(u_short *port) {
+static int startup(u_short *port) {
     int httpd = 0;
 
 #ifdef LISTEN_ON_IPV6
@@ -460,7 +465,7 @@ int startup(u_short *port) {
  * Parameter: the client socket */
 /**********************************************************************/
 #define HTTP501 "HTTP/1.0 501 Method Not Implemented\r\n" SERVER_STRING "Content-Type: text/html\r\n\r\n<HTML><HEAD><TITLE>Method Not Implemented\r\n</TITLE></HEAD>\r\n<BODY><P>HTTP request method not supported.\r\n</BODY></HTML>\r\n"
-void unimplemented(int client) {
+static void unimplemented(int client) {
     send(client, HTTP501, sizeof(HTTP501)-1, 0);
 }
 
