@@ -15,8 +15,10 @@
 #include <ctype.h>
 #include <strings.h>
 #include <string.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <pthread.h>
 
