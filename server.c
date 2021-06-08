@@ -272,6 +272,7 @@ static void execute_cgi(int client, const char *path, const char *method, const 
             #else
                 sendfile(client, cgi_output[0], &len, cnt);
             #endif
+            printf("cgi send %d bytes\n", len);
         }
 
         close(cgi_output[0]);
