@@ -9,6 +9,10 @@ ELSE()
     add_definitions("-DCPUBIT32")
 ENDIF()
 
+#在编译选项中加入c99支持
+add_compile_options(-std=c99)
+message(STATUS "optional:-std=c99") 
+
 include_directories("/usr/local/include")
 link_directories("/usr/local/lib")
 
