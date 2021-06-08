@@ -264,17 +264,18 @@ static void execute_cgi(int client, const char *path, const char *method, const 
                 }
             }
         uint32_t cnt = 0;
-        read(cgi_output[0], (char*)&cnt, sizeof(uint32_t));
-        if(cnt > 0) {
-            int len = 0;
-            #if __APPLE__
-                sendfile(cgi_output[0], client, 0, &len, &hdtr, 0);
-            #else
-                sendfile(client, cgi_output[0], &len, cnt);
-            #endif
-            printf("cgi send %d bytes\n", len);
-        }
-
+        if(read(cgi_output[0], (char*)&cnt, sizeof(uint32_t)) > 0) {
+            printf("cgi msg cnt: %u bytes.\n", cnt);
+            if(cnt > 0) {
+                int len = 0;
+                #if __APPLE__
+                    sendfile(cgi_output[0], client, 0, &len, &hdtr, 0);
+                #else
+                    sendfile(client, cgi_output[0], &len, cnt);
+                #endif
+                printf("cgi send %d bytes\n", len);
+            }
+        } else cannot_execute(client);
         close(cgi_output[0]);
         close(cgi_input[1]);
         waitpid(pid, &status, 0);
