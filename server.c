@@ -8,23 +8,21 @@
  */
 /* See feature_test_macros(7) */
 #define _GNU_SOURCE 1
-#include <stdio.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <netinet/in.h>
 #include <arpa/inet.h>
-#include <unistd.h>
 #include <ctype.h>
-#include <strings.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <pthread.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/file.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <sys/wait.h>
-#include <signal.h>
-#include <stdlib.h>
-#include <pthread.h>
-#include <fcntl.h>
-#include <zlib.h>
+#include <unistd.h>
 
 #if !__APPLE__
     #include <sys/sendfile.h> 
