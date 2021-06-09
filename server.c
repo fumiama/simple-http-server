@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <fcntl.h>
+#include <zlib.h>
 
 #if !__APPLE__
     #include <sys/sendfile.h> 
@@ -35,12 +36,23 @@
 
 #define SERVER_STRING "Server: TinyHttpd modified by Fumiama/1.0\r\n"
 
+enum METHOD_TYPE {GET, POST};
+typedef enum METHOD_TYPE METHOD_TYPE;
+
+struct HTTP_REQUEST {
+    const char *path;
+    const char *method;
+    METHOD_TYPE method_type;
+    const char *query_string;
+};
+typedef struct HTTP_REQUEST HTTP_REQUEST;
+
 static void accept_request(void *);
 static void bad_request(int);
 static void cat(int, FILE *);
 static void cannot_execute(int);
 static void error_die(const char *);
-static void execute_cgi(int, const char *, const char *, const char *);
+static void execute_cgi(int, int, const HTTP_REQUEST*);
 static uint32_t get_file_size(const char *, int);
 static int get_line(int, char *, int);
 static void handle_quit(int);
@@ -65,30 +77,36 @@ static void accept_request(void *cli) {
     char path[512];
     size_t i, j;
     struct stat st;
-    int cgi = 0; /* becomes true if server decides this is a CGI
-                    * program */
+    int cgi = 0; /* becomes true if server decides this is a CGI program */
     char *query_string = NULL;
+    METHOD_TYPE method_type;
 
     numchars = get_line(client, buf, sizeof(buf));
     i = 0;
     j = 0;
-    while (!ISspace(buf[j]) && (i < sizeof(method) - 1)) {
+    while(!ISspace(buf[j]) && (i < sizeof(method) - 1)) {
         method[i] = buf[j];
         i++;
         j++;
     }
     method[i] = '\0';
 
-    if (strcasecmp(method, "GET") && strcasecmp(method, "POST")) {
-        unimplemented(client);
-        return;
+    if(strcasecmp(method, "GET") == 0) {
+        method_type = GET;
     }
 
-    if (strcasecmp(method, "POST") == 0) cgi = 1;
+    if(strcasecmp(method, "POST") == 0) {
+        if(method_type == GET) {
+            unimplemented(client);
+            return;
+        } else {
+            cgi = 1;
+            method_type = POST;
+        }
+    }
 
     i = 0;
-    while (ISspace(buf[j]) && (j < sizeof(buf)))
-        j++;
+    while (ISspace(buf[j]) && (j < sizeof(buf))) j++;
     while (!ISspace(buf[j]) && (i < sizeof(url) - 1) && (j < sizeof(buf))) {
         url[i] = buf[j];
         i++;
@@ -96,7 +114,7 @@ static void accept_request(void *cli) {
     }
     url[i] = '\0';
 
-    if (strcasecmp(method, "GET") == 0) {
+    if (method_type == GET) {
         query_string = url;
         while ((*query_string != '?') && (*query_string != '\0')) query_string++;
         if (*query_string == '?') {
@@ -106,29 +124,38 @@ static void accept_request(void *cli) {
         }
     }
 
-    //getcwd(path, sizeof(path));
-    //strcat(path, url);
-    sprintf(path, ".%s", url[1] == '#' ? url + 2 : url);
-    if (path[strlen(path) - 1] == '/')
-        strcat(path, "index.html");
+    char* url_start = url + 1;
+    //skip possible ../
+    while((*url_start == '.' || *url_start == '/' || *url_start == '#') && *url_start != 0) url_start++;
+    path[0] = '.'; path[1] = '/'; path[2] = 0;
+    if(*url_start) strncat(path, url_start, 499);
+    printf("%s: %s with query: %s\n", method, path, query_string);
     if (stat(path, &st) == -1) {
-        while ((numchars > 0) && strcmp("\n", buf)) /* read & discard headers */
-            numchars = get_line(client, buf, sizeof(buf));
+        /* read & discard headers */
+        while ((numchars > 0) && strcmp("\n", buf)) numchars = get_line(client, buf, sizeof(buf));
         not_found(client);
-    }
-    else {
-        if ((st.st_mode & S_IFMT) == S_IFDIR) {
-            //getcwd(path, sizeof(path));
-            strcat(path, "/index.html");
+    } else {
+        if ((st.st_mode & S_IFMT) == S_IFDIR) strcat(path, "/index.html");
+        else if ((st.st_mode & S_IXUSR) || (st.st_mode & S_IXGRP) || (st.st_mode & S_IXOTH)) cgi = 1;
+        /* read & discard headers */
+        int content_length = 0;
+        while ((numchars > 0) && strcmp("\n", buf)) {
+            numchars = get_line(client, buf, sizeof(buf));
+            if(!content_length && strcasestr(buf, "Content-Length: ")) {
+                content_length = atoi(buf + 16);
+            }
         }
-        if ((st.st_mode & S_IXUSR) ||
-            (st.st_mode & S_IXGRP) ||
-            (st.st_mode & S_IXOTH))
-            cgi = 1;
-        if (!cgi) serve_file(client, path);
-        else execute_cgi(client, path, method, query_string);
+        if (method_type == POST && content_length == -1) bad_request(client);
+        else if (!cgi) serve_file(client, path);
+        else {
+            HTTP_REQUEST request;
+            request.path = path;
+            request.method = method;
+            request.method_type = method_type;
+            request.query_string = query_string;
+            execute_cgi(client, content_length, &request);
+        }
     }
-
     close(client);
 }
 
@@ -186,86 +213,61 @@ static void error_die(const char *sc) {
  * Parameters: client socket descriptor
  *             path to the CGI script */
 /**********************************************************************/
-static void execute_cgi(int client, const char *path, const char *method, const char *query_string) {
-    char buf[1024];
+static void execute_cgi(int client, int content_length, const HTTP_REQUEST* request) {
     int cgi_output[2];
     int cgi_input[2];
     pid_t pid;
-    int status;
     int i;
-    int numchars = 1;
-    int content_length = -1;
 
-    buf[0] = 'A';
-    buf[1] = '\0';
-    if (strcasecmp(method, "GET") == 0)
-        while ((numchars > 0) && strcmp("\n", buf)) /* read & discard headers */
-            numchars = get_line(client, buf, sizeof(buf));
-    else /* POST */
-    {
-        numchars = get_line(client, buf, sizeof(buf));
-        while ((numchars > 0) && strcmp("\n", buf)) {
-            buf[15] = '\0';
-            if (strcasecmp(buf, "Content-Length:") == 0)
-                content_length = atoi(&(buf[16]));
-            numchars = get_line(client, buf, sizeof(buf));
-        }
-        if (content_length == -1) {
-            bad_request(client);
-            return;
-        }
-    }
-
-    sprintf(buf, "HTTP/1.0 200 OK\r\n");
-    send(client, buf, strlen(buf), 0);
-
-    if (pipe(cgi_output) < 0) {
-        cannot_execute(client);
-        return;
-    }
-    if (pipe(cgi_input) < 0) {
-        cannot_execute(client);
-        return;
-    }
-
-    if ((pid = fork()) < 0) {
-        cannot_execute(client);
-        return;
-    }
+    if (pipe(cgi_output) < 0 || pipe(cgi_input) < 0 || (pid = fork()) < 0) cannot_execute(client);
     /* child: CGI script */
-    if (pid == 0) {
-        char meth_env[255];
-        char query_env[255];
-        char length_env[255];
+    else if (pid == 0) {
+        char env[255];
 
         dup2(cgi_output[1], 1);
         dup2(cgi_input[0], 0);
         close(cgi_output[0]);
         close(cgi_input[1]);
-        sprintf(meth_env, "REQUEST_METHOD=%s", method);
-        putenv(meth_env);
-        if (strcasecmp(method, "GET") == 0) {
-            sprintf(query_env, "QUERY_STRING=%s", query_string);
-            putenv(query_env);
+        sprintf(env, "REQUEST_METHOD=%s", request->method);
+        putenv(env);
+        if (request->method_type == GET) {
+            sprintf(env, "QUERY_STRING=%s", request->query_string);
+            putenv(env);
         }
         else { /* POST */
-            sprintf(length_env, "CONTENT_LENGTH=%d", content_length);
-            putenv(length_env);
+            sprintf(env, "CONTENT_LENGTH=%d", content_length);
+            putenv(env);
         }
-        execl(path, path, method, query_string, NULL);
+        execl(request->path, request->path, request->method, request->query_string, NULL);
         exit(0);
     }
     else { /* parent */
+        char buf[1024];
+
         close(cgi_output[1]);
         close(cgi_input[0]);
-        if (strcasecmp(method, "POST") == 0)
-            for (i = 0; i < content_length;) {
-                int cnt = recv(client, buf, 1024, 0);
-                if(cnt > 0) {
-                    write(cgi_input[1], buf, cnt);
-                    i += cnt;
+        if (request->method_type == POST) {
+            #if __APPLE__
+                for (i = 0; i < content_length;) {
+                    int cnt = recv(client, buf, 1024, 0);
+                    if(cnt > 0) {
+                        write(cgi_input[1], buf, cnt);
+                        i += cnt;
+                    }
                 }
-            }
+            #else
+                int len = 0;
+                while(len < content_length) {
+                    int delta = splice(client, NULL, cgi_input[1], NULL, content_length - len, SPLICE_F_GIFT);
+                    if(delta < 0) {
+                        cannot_execute(client);
+                        break;
+                    }
+                    len += delta;
+                }
+            #endif
+        }
+
         uint32_t cnt = 0;
         char* p = (char*)&cnt;
         while(p - (char*)&cnt < sizeof(uint32_t)) {
@@ -292,13 +294,12 @@ static void execute_cgi(int client, const char *path, const char *method, const 
                     }
                     len += delta;
                 }
-                
             #endif
             printf("cgi send %d bytes\n", len);
         }
         close(cgi_output[0]);
         close(cgi_input[1]);
-        waitpid(pid, &status, 0);
+        waitpid(pid, &i, 0);
     }
 }
 
@@ -389,7 +390,7 @@ static void headers(int client, const char *filepath) {
     uint32_t extpos = strlen(filepath) - 4;
 
     ADD_HERDER(HTTP200 SERVER_STRING);
-    ADD_HERDER_PARAM(CONTENT_TYPE, EXTNM_IS_NOT("html")?(EXTNM_IS_NOT(".css")?(EXTNM_IS_NOT("ico")?"text/plain":"image/x-icon"):"text/css"):"text/html");
+    ADD_HERDER_PARAM(CONTENT_TYPE, EXTNM_IS_NOT("html")?(EXTNM_IS_NOT(".css")?(EXTNM_IS_NOT(".ico")?"text/plain":"image/x-icon"):"text/css"):"text/html");
     ADD_HERDER_PARAM(CONTENT_LEN "\r\n", get_file_size(filepath, client));
     send(client, buf, offset, 0);
 }
@@ -411,13 +412,6 @@ static void not_found(int client) {
 /**********************************************************************/
 static void serve_file(int client, const char *filename) {
     FILE *resource = NULL;
-    int numchars = 1;
-    char buf[1024];
-
-    buf[0] = 'A';
-    buf[1] = '\0';
-    while ((numchars > 0) && strcmp("\n", buf)) /* read & discard headers */
-        numchars = get_line(client, buf, sizeof(buf));
 
     resource = fopen(filename, "rb");
     if (resource == NULL) not_found(client);
