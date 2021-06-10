@@ -52,7 +52,7 @@ simple-http-server -d port chdir
 
 # CGI usage
 
-When you put a executable file into the web path, the server will call `execl` to run it while passing 3 parameters as below
+When you put an executable file into the web path, the server will call `execl` to run it while passing 3 parameters as below
 
 ```c
 argv[0] = path;   //Path of the executable file
