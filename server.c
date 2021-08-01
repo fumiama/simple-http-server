@@ -58,6 +58,7 @@ static void headers(int, const char *);
 static void not_found(int);
 static void serve_file(int, const char *);
 static int startup(u_int16_t *);
+static void toolong(int);
 static void unimplemented(int);
 
 /**********************************************************************/
@@ -65,6 +66,11 @@ static void unimplemented(int);
  * return.  Process the request appropriately.
  * Parameters: the socket connected to the client */
 /**********************************************************************/
+
+/* read & discard headers */
+#define discard(client) \
+    while((numchars > 0) && strcmp("\n", buf)) numchars = get_line(client, buf, sizeof(buf))
+
 static void accept_request(void *cli) {
     pthread_detach(pthread_self());
     int client =(int)cli;
@@ -95,6 +101,7 @@ static void accept_request(void *cli) {
 
     if(strcasecmp(method, "POST") == 0) {
         if(method_type == GET) {
+			discard(client);
             unimplemented(client);
             return;
         } else {
@@ -104,11 +111,14 @@ static void accept_request(void *cli) {
     }
 
     i = 0;
-    while(ISspace(buf[j]) &&(j < sizeof(buf))) j++;
-    while(!ISspace(buf[j]) &&(i < sizeof(url) - 1) &&(j < sizeof(buf))) {
+    while(ISspace(buf[j]) && (j < sizeof(buf))) j++;
+    for(; !ISspace(buf[j]) && (i < sizeof(url) - 1) && (j < sizeof(buf)); i++, j++) {
         url[i] = buf[j];
-        i++;
-        j++;
+    }
+    if(!ISspace(buf[j])) {
+		discard(client);
+        toolong(client);
+        return;
     }
     url[i] = '\0';
 
@@ -127,16 +137,24 @@ static void accept_request(void *cli) {
     while((*url_start == '.' || *url_start == '/' || *url_start == '#') && *url_start != 0) url_start++;
     path[0] = '.'; path[1] = '/'; path[2] = 0;
     if(*url_start) strncat(path, url_start, 499);
-    printf("%s: %s with query: %s\n", method, path, query_string);
+    printf("%s %s with query '%s': ", method, path, query_string);
+    //花括号不可省略
     if(stat(path, &st) == -1) {
-        /* read & discard headers */
-        while((numchars > 0) && strcmp("\n", buf)) numchars = get_line(client, buf, sizeof(buf));
+        discard(client);
         not_found(client);
     } else {
-        if((st.st_mode & S_IFMT) == S_IFDIR) strcat(path, "/index.html");
-        else if((st.st_mode & S_IXUSR) ||(st.st_mode & S_IXGRP) ||(st.st_mode & S_IXOTH)) cgi = 1;
-        /* read & discard headers */
+        if((st.st_mode & S_IFMT) == S_IFDIR) {
+            strcat(path, "/index.html");
+            //花括号不可省略
+            if(stat(path, &st) == -1) {
+                discard(client);
+                not_found(client);
+                close(client);
+                return;
+            }
+        }
         int content_length = 0;
+        if((st.st_mode & S_IXUSR) ||(st.st_mode & S_IXGRP) ||(st.st_mode & S_IXOTH)) cgi = 1;
         while((numchars > 0) && strcmp("\n", buf)) {
             numchars = get_line(client, buf, sizeof(buf));
             if(!content_length && strcasestr(buf, "Content-Length: ")) {
@@ -391,6 +409,7 @@ static void headers(int client, const char *filepath) {
     ADD_HERDER_PARAM(CONTENT_TYPE, EXTNM_IS_NOT("html")?(EXTNM_IS_NOT(".css")?(EXTNM_IS_NOT(".ico")?"text/plain":"image/x-icon"):"text/css"):"text/html");
     ADD_HERDER_PARAM(CONTENT_LEN "\r\n", get_file_size(filepath, client));
     send(client, buf, offset, 0);
+    puts("200 OK.");
 }
 
 /**********************************************************************/
@@ -399,6 +418,7 @@ static void headers(int client, const char *filepath) {
 #define HTTP404 "HTTP/1.0 404 NOT FOUND\r\n" SERVER_STRING "Content-Type: text/html\r\n\r\n<HTML><TITLE>Not Found</TITLE>\r\n<BODY><P>The server could not fulfill\r\nyour request because the resource specified\r\nis unavailable or nonexistent.\r\n</BODY></HTML>\r\n"
 static void not_found(int client) {
     send(client, HTTP404, sizeof(HTTP404)-1, 0);
+    puts("404 Not Found.");
 }
 
 /**********************************************************************/
@@ -471,6 +491,16 @@ static int startup(uint16_t *port) {
  * implemented.
  * Parameter: the client socket */
 /**********************************************************************/
+#define HTTP414 "HTTP/1.0 414 Request-URI Too Long\r\n" SERVER_STRING "Content-Type: text/html\r\n\r\n<HTML><HEAD><TITLE>Request-URI Too Long\r\n</TITLE></HEAD>\r\n<BODY><P>HTTP request url length is over 254 chars.\r\n</BODY></HTML>\r\n"
+static void toolong(int client) {
+    send(client, HTTP414, sizeof(HTTP414)-1, 0);
+}
+
+/**********************************************************************/
+/* Inform the client that the requested web method has not been
+ * implemented.
+ * Parameter: the client socket */
+/**********************************************************************/
 #define HTTP501 "HTTP/1.0 501 Method Not Implemented\r\n" SERVER_STRING "Content-Type: text/html\r\n\r\n<HTML><HEAD><TITLE>Method Not Implemented\r\n</TITLE></HEAD>\r\n<BODY><P>HTTP request method not supported.\r\n</BODY></HTML>\r\n"
 static void unimplemented(int client) {
     send(client, HTTP501, sizeof(HTTP501)-1, 0);
@@ -492,23 +522,36 @@ static void unimplemented(int client) {
     error_die("accept");\
 }
 
+#define argequ(arg) (*(uint16_t*)argv[i] == *(uint16_t*)(arg))
 int main(int argc, char **argv) {
-    if(argc != 3 && argc != 4) puts("Usage: simple-http-server -d port chdir");
+    if(argc > 8) puts("Usage:\tsimple-http-server [-d] [-p <port>] [-r <rootdir>] [-u <uid>]\n   -d:\trun as daemon.\n   -p:\tif not set, choose a random one.\n   -r:\thttp root dir.\n   -u:\trun as this uid.");
     else {
-        int as_daemon = *(uint16_t*)argv[1] == *(uint16_t*)"-d";
+        int as_daemon = 0;
+        uint16_t port = 0;
+        char *cdir = "./";
+        uid_t uid = -1;
         int server_sock = -1;
-        uint16_t port =(uint16_t)atoi(argv[as_daemon?2:1]);
         int client_sock = -1;
         int pid = -1;
         struct sockaddr_in client_name;
         socklen_t client_name_len = sizeof(client_name);
         pthread_t newthread;
 
-        char *cdir = argv[as_daemon?3:2];
+        for(int i = 1; i < argc; i++) {
+            if(!as_daemon && argequ("-d")) as_daemon = 1;
+            else if(argequ("-p")) port = (uint16_t)atoi(argv[i + 1]);
+            else if(argequ("-r")) cdir = argv[i + 1];
+            else if(argequ("-u")) uid = atoi(argv[i + 1]);
+        }
+
         if(chdir(cdir)) error_die("chdir");
         server_sock = startup(&port);
-        printf("httpd running on port %d\n", port);
+        printf("httpd running on 0.0.0.0:%d at %s\n", port, cdir);
         if(as_daemon) {
+            if(uid > 0) {
+                setuid(uid);
+                setgid(uid);
+            }
             pid = fork();
             if(pid == 0) pid = fork();
             else return 0;
