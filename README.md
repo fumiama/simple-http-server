@@ -6,30 +6,31 @@ Created November 1999 by J. David Blackstone.
 Modified June 2021 by Fumiama(源文雨)
 
 # Protocol
+A necessary subset of `HTTP 1.0` with following options of request header being supported.
 
-A necessary subset of `HTTP 1.0` with following options of request header being supported
 ### From client
 - Content-Length
+
 ### From server
 - Content-Length
 - Content-Type (only support text/plain image/x-icon text/css text/html)
 - Server
+
 ### Code
 - 200 OK
 - 400 BAD REQUEST
 - 404 NOT FOUND
+- 414 Request-URI Too Long
 - 500 Internal Server Error
 - 501 Method Not Implemented
 
 # Features
-
 1. Serve files
 2. CGI
 3. Listen on `ipv6`
 4. Multi-thread
 
 # Compile
-
 ```bash
 git clone https://github.com/fumiama/simple-http-server.git
 cd simple-http-server
@@ -41,17 +42,16 @@ make install
 ```
 
 # Command line usage
-
 ```bash
-simple-http-server -d port chdir
+simple-http-server [-d] [-p <port>] [-r <rootdir>] [-u <uid>]
 ```
 
-- **-d** - run as daemon
-- **port** - bind server on this port (0 for a random one)
-- **chdir** - change root dir to here
+- **-d**:  run as daemon.
+- **-p**:  if not set, choose a random one.
+- **-r**:  http root dir.
+- **-u**:  run as this uid.
 
 # CGI usage
-
 When you put an executable file into the web path, the server will call `execl` to run it while passing 3 parameters as below
 
 ```c
