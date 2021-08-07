@@ -20,7 +20,6 @@ A necessary subset of `HTTP 1.0` with following options of request header being 
 - 200 OK
 - 400 BAD REQUEST
 - 404 NOT FOUND
-- 414 Request-URI Too Long
 - 500 Internal Server Error
 - 501 Method Not Implemented
 
