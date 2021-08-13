@@ -121,10 +121,10 @@ static void accept_request(void *cli) {
 		not_found(client);
 	} else {
 		int pathlen = strlen(path) + 1;
-		char path_heap[pathlen + 11];	// 11 is for possible /index.html
-		memcpy(path_heap, path, pathlen);
+		char path_stack[pathlen + 11];	// 11 is for possible /index.html
+		memcpy(path_stack, path, pathlen);
 		printf("<%d> ", pathlen);
-		path = path_heap;
+		path = path_stack;
 
 		int query_length = strlen(query_string) + 1;
 		char query_string_stack[query_length];
