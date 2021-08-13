@@ -121,15 +121,15 @@ static void accept_request(void *cli) {
 		not_found(client);
 	} else {
 		int pathlen = strlen(path) + 1;
-		char* path_heap = malloc(pathlen + 11);	// 11 is for possible /index.html
+		char path_heap[pathlen + 11];	// 11 is for possible /index.html
 		memcpy(path_heap, path, pathlen);
 		printf("<%d> ", pathlen);
 		path = path_heap;
 
-		char* query_heap = query_string;
-		int query_length = strlen(query_heap) + 1;
-		query_string = malloc(query_length);
-		memcpy(query_string, query_heap, query_length);
+		int query_length = strlen(query_string) + 1;
+		char query_string_stack[query_length];
+		memcpy(query_string_stack, query_string, query_length);
+		query_string = query_string_stack;
 		printf("(%d) ", query_length);
 
 		if((st.st_mode & S_IFMT) == S_IFDIR) {
@@ -160,7 +160,6 @@ static void accept_request(void *cli) {
 			request.query_string = query_string;
 			execute_cgi(client, content_length, &request);
 		}
-		free(path); free(query_string);
 	}
 	close(client);
 }
