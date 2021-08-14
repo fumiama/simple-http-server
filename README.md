@@ -1,5 +1,5 @@
 <div align="center">
-  <img src=".github/shinsako.jpg" width = "400" height = "400" alt="Shinsako"><br>
+  <img src=".github/shinsako.jpg" width = "360" height = "360" alt="Shinsako"><br>
   <h1>simple-http-server</h1>
   A variant of Tinyhttpd.<br><br>
 </div>
@@ -8,7 +8,7 @@
 > 
 > Modified June 2021 by Fumiama(源文雨)
 
-# Protocol
+## Protocol
 A necessary subset of `HTTP 1.0` with following options of request header being supported.
 
 ### From client
@@ -26,13 +26,13 @@ A necessary subset of `HTTP 1.0` with following options of request header being 
 - 500 Internal Server Error
 - 501 Method Not Implemented
 
-# Features
+## Features
 1. Serve files
 2. CGI
 3. Listen on `ipv6`
 4. Multi-thread
 
-# Compile
+## Compile
 ```bash
 git clone https://github.com/fumiama/simple-http-server.git
 cd simple-http-server
@@ -43,7 +43,7 @@ make
 make install
 ```
 
-# Command line usage
+## Command line usage
 ```bash
 simple-http-server [-d] [-p <port>] [-r <rootdir>] [-u <uid>]
 ```
@@ -53,7 +53,7 @@ simple-http-server [-d] [-p <port>] [-r <rootdir>] [-u <uid>]
 - **-r**:  http root dir.
 - **-u**:  run as this uid.
 
-# CGI usage
+## CGI usage
 When you put an executable file into the web path, the server will call `execl` to run it while passing 3 parameters as below
 
 ```c
