@@ -486,11 +486,12 @@ static void unimplemented(int client) {
  * Usage: simple-http-server [-d] [-p <port>] [-r <rootdir>] [-u <uid>]
 /**********************************************************************/
 #define accept_client(client_sock, server_sock, client_name, client_name_len, newthread) {\
+	signal(SIGCHLD, SIG_IGN);\
+	signal(SIGQUIT, handle_quit);\
+	signal(SIGPIPE, handle_quit);\
 	while(1) {\
 		client_sock = accept(server_sock,(struct sockaddr *)&client_name, &client_name_len);\
 		if(client_sock == -1) break;\
-		signal(SIGQUIT, handle_quit);\
-		signal(SIGPIPE, handle_quit);\
 		if(pthread_create(&newthread, NULL, accept_request, client_sock) != 0) perror("pthread_create");\
 	}\
 	close(client_sock);\
