@@ -433,9 +433,11 @@ static void serve_file(int client, const char *filename) {
 #ifdef LISTEN_ON_IPV6
 	static socklen_t struct_len = sizeof(struct sockaddr_in6);
 	static struct sockaddr_in6 name;
+	static struct sockaddr_in6 client_name;
 #else
 	static socklen_t struct_len = sizeof(struct sockaddr_in);
 	static struct sockaddr_in name;
+	static struct sockaddr_in client_name;
 #endif
 
 static int startup(uint16_t *port) {
@@ -483,20 +485,31 @@ static void unimplemented(int client) {
 /* simple-http-server
  * Usage: simple-http-server [-d] [-p <port>] [-r <rootdir>] [-u <uid>]
 /**********************************************************************/
-#define accept_client(client_sock, server_sock, client_name, client_name_len, newthread) {\
-	signal(SIGCHLD, SIG_IGN);\
-	signal(SIGQUIT, handle_quit);\
-	signal(SIGPIPE, handle_quit);\
-	pthread_attr_t attr;\
-    pthread_attr_init(&attr);\
-    pthread_attr_setdetachstate(&attr, 1);\
-	while(1) {\
-		client_sock = accept(server_sock,(struct sockaddr *)&client_name, &client_name_len);\
-		if(client_sock == -1) break;\
-		if(pthread_create(&newthread, &attr, &accept_request, client_sock) != 0) perror("pthread_create");\
-	}\
-	close(client_sock);\
-	error_die("accept");\
+static pthread_attr_t attr;
+static pthread_t accept_thread;
+static socklen_t client_name_len = sizeof(client_name);
+int accept_client(int server_sock) {
+	signal(SIGCHLD, SIG_IGN);
+	signal(SIGQUIT, handle_quit);
+	signal(SIGPIPE, handle_quit);
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, 1);
+	while(1) {
+		int client_sock = accept(server_sock, (struct sockaddr *)&client_name, &client_name_len);
+		if(client_sock == -1) continue;
+		uint16_t port = ntohs(client_name.sin_port);
+		#ifdef LISTEN_ON_IPV6
+			struct in6_addr in = client_name.sin6_addr;
+			char str[INET6_ADDRSTRLEN];	// 46
+			inet_ntop(AF_INET6, &in, str, sizeof(str));
+		#else
+			struct in_addr in = client_name.sin_addr;
+			char str[INET_ADDRSTRLEN];	// 16
+			inet_ntop(AF_INET, &in, str, sizeof(str));
+		#endif
+		printf("Accept client %s:%u\n", str, port);
+		if(pthread_create(&accept_thread, &attr, &accept_request, client_sock) != 0) perror("pthread_create");
+	}
 }
 
 #define argequ(arg) (*(uint16_t*)argv[i] == *(uint16_t*)(arg))
@@ -508,11 +521,7 @@ int main(int argc, char **argv) {
 		char *cdir = "./";
 		uid_t uid = -1;
 		int server_sock = -1;
-		int client_sock = -1;
 		int pid = -1;
-		struct sockaddr_in client_name;
-		socklen_t client_name_len = sizeof(client_name);
-		pthread_t newthread;
 
 		for(int i = 1; i < argc; i++) {
 			if(!as_daemon && argequ("-d")) as_daemon = 1;
@@ -538,7 +547,7 @@ int main(int argc, char **argv) {
 				pid = fork();
 			}
 			if(pid < 0) perror("fork");
-			else accept_client(client_sock, server_sock, client_name, client_name_len, newthread);
-		} else accept_client(client_sock, server_sock, client_name, client_name_len, newthread);
+			else accept_client(server_sock);
+		} else accept_client(server_sock);
 	}
 }
