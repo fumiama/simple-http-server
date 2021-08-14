@@ -1,5 +1,5 @@
 <div align="center">
-  <img src=".github/shinsako.jpg" width = "150" height = "150" alt="Shinsako"><br>
+  <img src=".github/shinsako.jpg" width = "400" height = "400" alt="Shinsako"><br>
   <h1>simple-http-server</h1>
   A variant of Tinyhttpd.<br><br>
 </div>
