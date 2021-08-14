@@ -1,9 +1,12 @@
-# simple-http-server
-A variant of Tinyhttpd.
+<div align="center">
+  <img src=".github/shinsako.jpg" width = "150" height = "150" alt="Shinsako"><br>
+  <h1>simple-http-server</h1>
+  A variant of Tinyhttpd.<br><br>
+</div>
 
-Created November 1999 by J. David Blackstone.
-
-Modified June 2021 by Fumiama(源文雨)
+> Created November 1999 by J. David Blackstone.
+> 
+> Modified June 2021 by Fumiama(源文雨)
 
 # Protocol
 A necessary subset of `HTTP 1.0` with following options of request header being supported.
