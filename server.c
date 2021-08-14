@@ -229,6 +229,7 @@ static void execute_cgi(int client, int content_length, const HTTP_REQUEST* requ
 	else if(pid == 0) {
 		char env[255];
 
+		signal(SIGCHLD,SIG_IGN);
 		dup2(cgi_output[1], 1);
 		dup2(cgi_input[0], 0);
 		close(cgi_output[0]);
