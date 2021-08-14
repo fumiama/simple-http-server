@@ -497,12 +497,13 @@ int accept_client(int server_sock) {
 	while(1) {
 		int client_sock = accept(server_sock, (struct sockaddr *)&client_name, &client_name_len);
 		if(client_sock == -1) continue;
-		uint16_t port = ntohs(client_name.sin_port);
 		#ifdef LISTEN_ON_IPV6
+			uint16_t port = ntohs(client_name.sin6_port);
 			struct in6_addr in = client_name.sin6_addr;
 			char str[INET6_ADDRSTRLEN];	// 46
 			inet_ntop(AF_INET6, &in, str, sizeof(str));
 		#else
+			uint16_t port = ntohs(client_name.sin_port);
 			struct in_addr in = client_name.sin_addr;
 			char str[INET_ADDRSTRLEN];	// 16
 			inet_ntop(AF_INET, &in, str, sizeof(str));
