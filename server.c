@@ -488,7 +488,7 @@ static void unimplemented(int client) {
 static pthread_attr_t attr;
 static pthread_t accept_thread;
 static socklen_t client_name_len = sizeof(client_name);
-int accept_client(int server_sock) {
+static int accept_client(int server_sock) {
 	signal(SIGCHLD, SIG_IGN);
 	signal(SIGQUIT, handle_quit);
 	signal(SIGPIPE, handle_quit);
