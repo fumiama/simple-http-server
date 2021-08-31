@@ -13,8 +13,8 @@ ENDIF()
 add_compile_options(-std=c99)
 message(STATUS "optional:-std=c99") 
 
-include_directories("/usr/local/include")
-link_directories("/usr/local/lib")
+# include_directories("/usr/local/include")
+# link_directories("/usr/local/lib")
 
 add_executable(simple-http-server server.c)
 target_link_libraries(simple-http-server pthread)
