@@ -46,6 +46,8 @@ struct HTTP_REQUEST {
 };
 typedef struct HTTP_REQUEST HTTP_REQUEST;
 
+static int server_sock = -1;
+
 static void accept_request(void *);
 static void bad_request(int);
 static void cat(int, FILE *);
@@ -55,6 +57,7 @@ static void execute_cgi(int, int, const HTTP_REQUEST*);
 static uint32_t get_file_size(const char *, int);
 static int get_line(int, char *, int);
 static void handle_quit(int);
+static void handle_accept_quit(int);
 static int headers(int, const char *);
 static void not_found(int);
 static void serve_file(int, const char *);
@@ -82,6 +85,10 @@ static void accept_request(void *cli) {
 	int numchars, cgi = 0, j; // cgi becomes true if server decides this is a CGI program
 	struct stat st;
 	METHOD_TYPE method_type;
+
+	signal(SIGCHLD, SIG_IGN);
+	signal(SIGQUIT, handle_quit);
+	signal(SIGPIPE, handle_quit);
 
 	numchars = get_line(client, buf, sizeof(buf));
 	j = 0;
@@ -380,6 +387,15 @@ static void handle_quit(int signo) {
 }
 
 /**********************************************************************/
+/* Handle listening thread quit signal */
+/**********************************************************************/
+static void handle_accept_quit(int signo) {
+	perror("accept_client");
+	close(server_sock);
+	exit(EXIT_FAILURE);
+}
+
+/**********************************************************************/
 /* Return the informational HTTP headers about a file. */
 /* Parameters: the socket to print the headers on
  *             the name of the file */
@@ -495,14 +511,14 @@ static int startupunix(char *path) {
 	#if __APPLE__
 		uname.sun_len = strlen(path)+1; // including null
 	#else
-		int sun_len = strlen(path);
+		int sun_len = strlen(path)+1;
 	#endif
 	if(httpd < 0) error_die("unix socket");
 	unlink(path); // in case it already exists
 	if(bind(
 		httpd,
 		(struct sockaddr *)&uname,
-		(void*)uname.sun_path-(void*)&uname+
+		(void*)&uname.sun_path-(void*)&uname+
 		#if __APPLE__
 			uname.sun_len
 		#else
@@ -530,14 +546,14 @@ static void unimplemented(int client) {
 /************************************************************************/
 static pthread_attr_t attr;
 static pthread_t accept_thread;
-static int accept_client(int server_sock, int is_unix_sock) {
+static int accept_client(int is_unix_sock) {
 	socklen_t client_name_len = is_unix_sock?sizeof(uclient_name):sizeof(client_name);
 
-	signal(SIGCHLD, SIG_IGN);
-	signal(SIGQUIT, handle_quit);
-	signal(SIGPIPE, handle_quit);
+	signal(SIGQUIT, handle_accept_quit);
+	signal(SIGPIPE, handle_accept_quit);
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, 1);
+
 	while(1) {
 		int client_sock = accept(server_sock, (struct sockaddr *)(is_unix_sock?&uclient_name:&client_name), &client_name_len);
 		if(client_sock <= 0) {
@@ -576,7 +592,6 @@ int main(int argc, char **argv) {
 		char* socket_path = NULL;
 		char *cdir = "./";
 		uid_t uid = -1;
-		int server_sock = -1;
 		int pid = -1;
 
 		for(int i = 1; i < argc; i++) {
@@ -617,7 +632,7 @@ int main(int argc, char **argv) {
 				pid = fork();
 			}
 			if(pid < 0) perror("fork");
-			else accept_client(server_sock, !port);
-		} else accept_client(server_sock, !port);
+			else accept_client(!port);
+		} else accept_client(!port);
 	}
 }
