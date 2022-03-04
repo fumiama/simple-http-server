@@ -540,7 +540,10 @@ static int accept_client(int server_sock, int is_unix_sock) {
     pthread_attr_setdetachstate(&attr, 1);
 	while(1) {
 		int client_sock = accept(server_sock, (struct sockaddr *)(is_unix_sock?&uclient_name:&client_name), &client_name_len);
-		if(client_sock == -1) continue;
+		if(client_sock <= 0) {
+			puts("Failed to accept a client, continue...");
+			continue;
+		}
 		if(is_unix_sock) {
 			uclient_name.sun_path[sizeof(uclient_name.sun_path)-1] = 0;
 			printf("Accept client %s\n", uclient_name.sun_path);
