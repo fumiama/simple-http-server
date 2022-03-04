@@ -274,7 +274,7 @@ static void execute_cgi(int client, int content_length, const HTTP_REQUEST* requ
 				while(len < content_length) {
 					int delta = splice(client, NULL, cgi_input[1], NULL, content_length - len, SPLICE_F_GIFT);
 					if(delta <= 0) {
-						cannot_execute(client);
+						internal_error(client);
 						goto CGI_CLOSE;
 					}
 					len += delta;
@@ -311,7 +311,7 @@ static void execute_cgi(int client, int content_length, const HTTP_REQUEST* requ
 				while(len < cnt) {
 					int delta = splice(cgi_output[0], NULL, client, NULL, cnt - len, SPLICE_F_GIFT);
 					if(delta <= 0) {
-						cannot_execute(client);
+						internal_error(client);
 						goto CGI_CLOSE;
 					}
 					len += delta;
