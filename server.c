@@ -486,6 +486,7 @@ static int startup(uint16_t *port) {
 }
 
 static struct sockaddr_un uname;
+static struct sockaddr_un uclient_name;
 static int startupunix(char *path) {
 	int httpd = socket(AF_UNIX, SOCK_STREAM, 0);
 	uname.sun_family = AF_UNIX;
@@ -529,28 +530,35 @@ static void unimplemented(int client) {
 /************************************************************************/
 static pthread_attr_t attr;
 static pthread_t accept_thread;
-static socklen_t client_name_len = sizeof(client_name);
-static int accept_client(int server_sock) {
+static int accept_client(int server_sock, int is_unix_sock) {
+	socklen_t client_name_len = is_unix_sock?sizeof(uclient_name):sizeof(client_name);
+
 	signal(SIGCHLD, SIG_IGN);
 	signal(SIGQUIT, handle_quit);
 	signal(SIGPIPE, handle_quit);
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, 1);
 	while(1) {
-		int client_sock = accept(server_sock, (struct sockaddr *)&client_name, &client_name_len);
+		int client_sock = accept(server_sock, (struct sockaddr *)(is_unix_sock?&uclient_name:&client_name), &client_name_len);
 		if(client_sock == -1) continue;
-		#ifdef LISTEN_ON_IPV6
-			uint16_t port = ntohs(client_name.sin6_port);
-			struct in6_addr in = client_name.sin6_addr;
-			char str[INET6_ADDRSTRLEN];	// 46
-			inet_ntop(AF_INET6, &in, str, sizeof(str));
-		#else
-			uint16_t port = ntohs(client_name.sin_port);
-			struct in_addr in = client_name.sin_addr;
-			char str[INET_ADDRSTRLEN];	// 16
-			inet_ntop(AF_INET, &in, str, sizeof(str));
-		#endif
-		printf("Accept client %s:%u\n", str, port);
+		if(is_unix_sock) {
+			uclient_name.sun_path[sizeof(uclient_name.sun_path)-1] = 0;
+			printf("Accept client %s\n", uclient_name.sun_path);
+		}
+		else {
+			#ifdef LISTEN_ON_IPV6
+				uint16_t port = ntohs(client_name.sin6_port);
+				struct in6_addr in = client_name.sin6_addr;
+				char str[INET6_ADDRSTRLEN];	// 46
+				inet_ntop(AF_INET6, &in, str, sizeof(str));
+			#else
+				uint16_t port = ntohs(client_name.sin_port);
+				struct in_addr in = client_name.sin_addr;
+				char str[INET_ADDRSTRLEN];	// 16
+				inet_ntop(AF_INET, &in, str, sizeof(str));
+			#endif
+			printf("Accept client %s:%u\n", str, port);
+		}
 		if(pthread_create(&accept_thread, &attr, &accept_request, client_sock) != 0) perror("pthread_create");
 	}
 }
@@ -606,7 +614,7 @@ int main(int argc, char **argv) {
 				pid = fork();
 			}
 			if(pid < 0) perror("fork");
-			else accept_client(server_sock);
-		} else accept_client(server_sock);
+			else accept_client(server_sock, !port);
+		} else accept_client(server_sock, !port);
 	}
 }
