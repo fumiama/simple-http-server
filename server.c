@@ -545,7 +545,7 @@ static int accept_client(int server_sock, int is_unix_sock) {
 			continue;
 		}
 		if(is_unix_sock) {
-			uclient_name.sun_path[sizeof(uclient_name.sun_path)-1] = 0;
+			((char*)&uclient_name)[client_name_len] = 0;
 			printf("Accept client %s\n", uclient_name.sun_path);
 		}
 		else {
