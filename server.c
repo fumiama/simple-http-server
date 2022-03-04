@@ -258,15 +258,18 @@ static void execute_cgi(int client, int content_length, const HTTP_REQUEST* requ
 					if(cnt > 0) {
 						write(cgi_input[1], buf, cnt);
 						i += cnt;
+					} else {
+						cannot_execute(client);
+						goto CGI_CLOSE;
 					}
 				}
 			#else
 				int len = 0;
 				while(len < content_length) {
 					int delta = splice(client, NULL, cgi_input[1], NULL, content_length - len, SPLICE_F_GIFT);
-					if(delta < 0) {
+					if(delta <= 0) {
 						cannot_execute(client);
-						break;
+						goto CGI_CLOSE;
 					}
 					len += delta;
 				}
@@ -278,7 +281,10 @@ static void execute_cgi(int client, int content_length, const HTTP_REQUEST* requ
 		while(p - (char*)&cnt < sizeof(uint32_t)) {
 			int offset = read(cgi_output[0], p, sizeof(uint32_t));
 			if(offset > 0) p += offset;
-			else cannot_execute(client);
+			else {
+				cannot_execute(client);
+				goto CGI_CLOSE;
+			}
 		}
 		printf("CGI msg len: %u bytes.\n", cnt);
 		if(cnt > 0) {
@@ -286,22 +292,29 @@ static void execute_cgi(int client, int content_length, const HTTP_REQUEST* requ
 			#if __APPLE__
 				char* data = malloc(cnt);
 				while(len < cnt) {
-					len += read(cgi_output[0], data, cnt);
+					int n = read(cgi_output[0], data, cnt);
+					if(n <= 0) {
+						if(data) free(data);
+						cannot_execute(client);
+						goto CGI_CLOSE;
+					}
+					len += n;
 					send(client, data, len, 0);
 				}
 				if(data) free(data);
 			#else
 				while(len < cnt) {
 					int delta = splice(cgi_output[0], NULL, client, NULL, cnt - len, SPLICE_F_GIFT);
-					if(delta < 0) {
+					if(delta <= 0) {
 						cannot_execute(client);
-						break;
+						goto CGI_CLOSE;
 					}
 					len += delta;
 				}
 			#endif
 			printf("CGI send %d bytes\n", len);
 		}
+	CGI_CLOSE:
 		close(cgi_output[0]);
 		close(cgi_input[1]);
 		waitpid(pid, &i, 0);
