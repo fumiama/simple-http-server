@@ -491,10 +491,23 @@ static int startupunix(char *path) {
 	uname.sun_family = AF_UNIX;
 	strncpy(uname.sun_path, path, sizeof(uname.sun_path));
 	uname.sun_path[sizeof(uname.sun_path)-1] = 0; // avoid overlap
-	uname.sun_len = strlen(path)+1; // including null
+	#if __APPLE__
+		uname.sun_len = strlen(path)+1; // including null
+	#else
+		int sun_len = strlen(path)+1; // including null
+	#endif
 	if(httpd < 0) error_die("unix socket");
 	unlink(path); // in case it already exists
-	if(bind(httpd, (struct sockaddr *)&uname, (void*)uname.sun_path-(void*)&uname+uname.sun_len) < 0) error_die("bind");
+	if(bind(
+		httpd,
+		(struct sockaddr *)&uname,
+		(void*)uname.sun_path-(void*)&uname+
+		#if __APPLE__
+			uname.sun_len
+		#else
+			sun_len
+		#endif
+		) < 0) error_die("bind");
 	if(listen(httpd, 5) < 0) error_die("listen");
 	return httpd;
 }
