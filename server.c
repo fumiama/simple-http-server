@@ -21,6 +21,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -58,6 +59,7 @@ static int headers(int, const char *);
 static void not_found(int);
 static void serve_file(int, const char *);
 static int startup(u_int16_t *);
+static int startupunix(char *);
 static void unimplemented(int);
 
 /**********************************************************************/
@@ -189,7 +191,7 @@ static void cat(int client, FILE *resource) {
 		rewind(resource);
 		sendfile(client, fileno(resource), &len, file_size);
 	#endif
-	printf("Sendfile: %lu bytes.\n", len);
+	printf("Sendfile: %u bytes.\n", (unsigned int)len);
 }
 
 /**********************************************************************/
@@ -357,7 +359,7 @@ static int get_line(int sock, char *buf, int size) {
 }
 
 /**********************************************************************/
-/* Handle thread quit signal
+/* Handle thread quit signal */
 /**********************************************************************/
 static void handle_quit(int signo) {
 	perror("handle");
@@ -455,7 +457,7 @@ static int startup(uint16_t *port) {
 		bzero(&(name.sin_zero), 8);
 		httpd = socket(AF_INET, SOCK_STREAM, 0);
 	#endif
-	if(httpd == -1) error_die("socket");
+	if(httpd < 0) error_die("socket");
 	if(bind(httpd,(struct sockaddr *)&name, struct_len) < 0) error_die("bind");
 	/* if dynamically allocating a port */
 	if(*port == 0) {
@@ -467,7 +469,21 @@ static int startup(uint16_t *port) {
 		#endif
 	}
 	if(listen(httpd, 5) < 0) error_die("listen");
-	return(httpd);
+	return httpd;
+}
+
+static struct sockaddr_un uname;
+static int startupunix(char *path) {
+	int httpd = socket(AF_UNIX, SOCK_STREAM, 0);
+	uname.sun_family = AF_UNIX;
+	strncpy(uname.sun_path, path, sizeof(uname.sun_path));
+	uname.sun_path[sizeof(uname.sun_path)-1] = 0; // avoid overlap
+	uname.sun_len = strlen(path)+1; // including null
+	if(httpd < 0) error_die("unix socket");
+	unlink(path); // in case it already exists
+	if(bind(httpd, (struct sockaddr *)&uname, (void*)uname.sun_path-(void*)&uname+uname.sun_len) < 0) error_die("bind");
+	if(listen(httpd, 5) < 0) error_die("listen");
+	return httpd;
 }
 
 /**********************************************************************/
@@ -481,10 +497,10 @@ static void unimplemented(int client) {
 	puts("501 Method Not Implemented.");
 }
 
-/**********************************************************************/
+/************************************************************************/
 /* simple-http-server
- * Usage: simple-http-server [-d] [-p <port>] [-r <rootdir>] [-u <uid>]
-/**********************************************************************/
+ * Usage: simple-http-server [-d] [-p <port>] [-r <rootdir>] [-u <uid>] */
+/************************************************************************/
 static pthread_attr_t attr;
 static pthread_t accept_thread;
 static socklen_t client_name_len = sizeof(client_name);
@@ -514,11 +530,13 @@ static int accept_client(int server_sock) {
 }
 
 #define argequ(arg) (*(uint16_t*)argv[i] == *(uint16_t*)(arg))
+#define USAGE "Usage:\tsimple-http-server [-h] [-d] [-p <port|unix socket path>] [-r <rootdir>] [-u <uid>]\n   -h:\tdisplay this help.\n   -d:\trun as daemon.\n   -p:\tif not set, we will choose a random port.\n   -r:\thttp root dir.\n   -u:\trun as this uid."
 int main(int argc, char **argv) {
-	if(argc > 8) puts("Usage:\tsimple-http-server [-d] [-p <port>] [-r <rootdir>] [-u <uid>]\n   -d:\trun as daemon.\n   -p:\tif not set, choose a random one.\n   -r:\thttp root dir.\n   -u:\trun as this uid.");
+	if(argc > 8) puts(USAGE);
 	else {
 		int as_daemon = 0;
 		uint16_t port = 0;
+		char* socket_path = NULL;
 		char *cdir = "./";
 		uid_t uid = -1;
 		int server_sock = -1;
@@ -526,14 +544,28 @@ int main(int argc, char **argv) {
 
 		for(int i = 1; i < argc; i++) {
 			if(!as_daemon && argequ("-d")) as_daemon = 1;
-			else if(argequ("-p")) port = (uint16_t)atoi(argv[i + 1]);
-			else if(argequ("-r")) cdir = argv[i + 1];
-			else if(argequ("-u")) uid = atoi(argv[i + 1]);
+			else if(argequ("-p")) {
+				i++;
+				if(isdigit(argv[i][0])) port = (uint16_t)atoi(argv[i]);
+				else socket_path = argv[i];
+			}
+			else if(argequ("-r")) cdir = argv[++i];
+			else if(argequ("-u")) uid = atoi(argv[++i]);
+			else if(argequ("-h"))  {
+				puts(USAGE);
+				exit(EXIT_SUCCESS);
+			}
+			else {
+				printf("unknown argument: %s\n", argv[i]);
+				puts(USAGE);
+				exit(EXIT_FAILURE);
+			}
 		}
 
 		if(chdir(cdir)) error_die("chdir");
-		server_sock = startup(&port);
-		printf("httpd running on 0.0.0.0:%d at %s\n", port, cdir);
+		server_sock = (!port&&socket_path)?startupunix(socket_path):startup(&port);
+		if(port) printf("httpd running on 0.0.0.0:%d at %s\n", port, cdir);
+		else printf("httpd running on %s at %s\n", socket_path, cdir);
 		if(as_daemon) {
 			if(uid > 0) {
 				setuid(uid);

@@ -30,7 +30,8 @@ A necessary subset of `HTTP 1.0` with following options of request header being 
 1. Serve files
 2. CGI
 3. Listen on `ipv6`
-4. Multi-thread
+4. Listen on unix socket
+5. Multi-thread
 
 ## Compile
 ```bash
@@ -45,11 +46,12 @@ make install
 
 ## Command line usage
 ```bash
-simple-http-server [-d] [-p <port>] [-r <rootdir>] [-u <uid>]
+simple-http-server [-h] [-d] [-p <port|unix socket path>] [-r <rootdir>] [-u <uid>]
 ```
 
+- **-h**:  display this help.
 - **-d**:  run as daemon.
-- **-p**:  if not set, choose a random one.
+- **-p**:  if not set, we will choose a random port.
 - **-r**:  http root dir.
 - **-u**:  run as this uid.
 
