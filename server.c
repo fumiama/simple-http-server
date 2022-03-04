@@ -495,7 +495,7 @@ static int startupunix(char *path) {
 	#if __APPLE__
 		uname.sun_len = strlen(path)+1; // including null
 	#else
-		int sun_len = strlen(path)+1; // including null
+		int sun_len = strlen(path);
 	#endif
 	if(httpd < 0) error_die("unix socket");
 	unlink(path); // in case it already exists
