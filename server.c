@@ -51,14 +51,13 @@ static int server_sock = -1;
 static void accept_request(void *);
 static void bad_request(int);
 static void cat(int, FILE *);
-static void cannot_execute(int);
 static void error_die(const char *);
 static void execute_cgi(int, int, const HTTP_REQUEST*);
 static uint32_t get_file_size(const char *, int);
 static int get_line(int, char *, int);
 static void handle_quit(int);
-static void handle_accept_quit(int);
 static int headers(int, const char *);
+static void internal_error(int);
 static void not_found(int);
 static void serve_file(int, const char *);
 static int startup(u_int16_t *);
@@ -206,7 +205,7 @@ static void cat(int client, FILE *resource) {
  * Parameter: the client socket descriptor. */
 /**********************************************************************/
 #define HTTP500 "HTTP/1.0 500 Internal Server Error\r\nContent-Type: text/html\r\n\r\n<P>Internal Server Error.\r\n"
-static void cannot_execute(int client) {
+static void internal_error(int client) {
 	send(client, HTTP500, sizeof(HTTP500)-1, 0);
 	puts("500 Internal Server Error.");
 }
@@ -231,7 +230,7 @@ static void execute_cgi(int client, int content_length, const HTTP_REQUEST* requ
 	int cgi_output[2], cgi_input[2], i;
 	pid_t pid;
 
-	if(pipe(cgi_output) < 0 || pipe(cgi_input) < 0 || (pid = fork()) < 0) cannot_execute(client);
+	if(pipe(cgi_output) < 0 || pipe(cgi_input) < 0 || (pid = fork()) < 0) internal_error(client);
 	/* child: CGI script */
 	else if(pid == 0) {
 		char env[255];
@@ -266,7 +265,7 @@ static void execute_cgi(int client, int content_length, const HTTP_REQUEST* requ
 						write(cgi_input[1], buf, cnt);
 						i += cnt;
 					} else {
-						cannot_execute(client);
+						internal_error(client);
 						goto CGI_CLOSE;
 					}
 				}
@@ -289,7 +288,7 @@ static void execute_cgi(int client, int content_length, const HTTP_REQUEST* requ
 			int offset = read(cgi_output[0], p, sizeof(uint32_t));
 			if(offset > 0) p += offset;
 			else {
-				cannot_execute(client);
+				internal_error(client);
 				goto CGI_CLOSE;
 			}
 		}
@@ -297,18 +296,17 @@ static void execute_cgi(int client, int content_length, const HTTP_REQUEST* requ
 		if(cnt > 0) {
 			int len = 0;
 			#if __APPLE__
-				char* data = malloc(cnt);
+				int cap = (cnt>1024)?1024:cnt;
+				char data[cap];
 				while(len < cnt) {
-					int n = read(cgi_output[0], data, cnt);
+					int n = read(cgi_output[0], data, cap);
 					if(n <= 0) {
-						if(data) free(data);
-						cannot_execute(client);
+						internal_error(client);
 						goto CGI_CLOSE;
 					}
 					len += n;
-					send(client, data, len, 0);
+					send(client, data, cap, 0);
 				}
-				if(data) free(data);
 			#else
 				while(len < cnt) {
 					int delta = splice(cgi_output[0], NULL, client, NULL, cnt - len, SPLICE_F_GIFT);
@@ -382,17 +380,8 @@ static int get_line(int sock, char *buf, int size) {
 /* Handle thread quit signal */
 /**********************************************************************/
 static void handle_quit(int signo) {
-	perror("handle");
+	perror("accept_request");
 	pthread_exit(NULL);
-}
-
-/**********************************************************************/
-/* Handle listening thread quit signal */
-/**********************************************************************/
-static void handle_accept_quit(int signo) {
-	perror("accept_client");
-	close(server_sock);
-	exit(EXIT_FAILURE);
 }
 
 /**********************************************************************/
@@ -502,29 +491,17 @@ static int startup(uint16_t *port) {
 }
 
 static struct sockaddr_un uname;
-static struct sockaddr_un uclient_name;
 static int startupunix(char *path) {
 	int httpd = socket(AF_UNIX, SOCK_STREAM, 0);
 	uname.sun_family = AF_UNIX;
 	strncpy(uname.sun_path, path, sizeof(uname.sun_path));
 	uname.sun_path[sizeof(uname.sun_path)-1] = 0; // avoid overlap
 	#if __APPLE__
-		uname.sun_len = strlen(path)+1; // including null
-	#else
-		int sun_len = strlen(path)+1;
+		uname.sun_len = strlen(uname.sun_path);
 	#endif
 	if(httpd < 0) error_die("unix socket");
 	unlink(path); // in case it already exists
-	if(bind(
-		httpd,
-		(struct sockaddr *)&uname,
-		(void*)&uname.sun_path-(void*)&uname+
-		#if __APPLE__
-			uname.sun_len
-		#else
-			sun_len
-		#endif
-		) < 0) error_die("bind");
+	if(bind(httpd, (struct sockaddr *)&uname, SUN_LEN(&uname)) < 0) error_die("bind");
 	if(listen(httpd, 5) < 0) error_die("listen");
 	return httpd;
 }
@@ -545,25 +522,18 @@ static void unimplemented(int client) {
  * Usage: simple-http-server [-d] [-p <port>] [-r <rootdir>] [-u <uid>] */
 /************************************************************************/
 static pthread_attr_t attr;
-static pthread_t accept_thread;
 static int accept_client(int is_unix_sock) {
-	socklen_t client_name_len = is_unix_sock?sizeof(uclient_name):sizeof(client_name);
-
-	signal(SIGQUIT, handle_accept_quit);
-	signal(SIGPIPE, handle_accept_quit);
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, 1);
 
 	while(1) {
-		int client_sock = accept(server_sock, (struct sockaddr *)(is_unix_sock?&uclient_name:&client_name), &client_name_len);
-		if(client_sock <= 0) {
+		socklen_t client_name_len = sizeof(client_name);
+		int client_sock = accept(server_sock, (struct sockaddr *)(is_unix_sock?NULL:&client_name), is_unix_sock?NULL:&client_name_len);
+		if(client_sock < 0) {
 			puts("Failed to accept a client, continue...");
 			continue;
 		}
-		if(is_unix_sock) {
-			((char*)&uclient_name)[client_name_len] = 0;
-			printf("Accept client %s\n", uclient_name.sun_path);
-		}
+		if(is_unix_sock) puts("Accept client from unix sock");
 		else {
 			#ifdef LISTEN_ON_IPV6
 				uint16_t port = ntohs(client_name.sin6_port);
@@ -578,7 +548,9 @@ static int accept_client(int is_unix_sock) {
 			#endif
 			printf("Accept client %s:%u\n", str, port);
 		}
+		pthread_t accept_thread;
 		if(pthread_create(&accept_thread, &attr, &accept_request, client_sock) != 0) perror("pthread_create");
+		printf("Created new thread at 0x%x\n", accept_thread);
 	}
 }
 
