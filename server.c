@@ -236,7 +236,6 @@ static void error_die(const char *sc) {
 static void execute_cgi(int client, int content_length, const HTTP_REQUEST* request) {
 	int cgi_output[2], cgi_input[2];
 	pid_t pid;
-	char buf[1024];
 
 	if(pipe(cgi_output) < 0 || pipe(cgi_input) < 0 || (pid = fork()) < 0) {
 		internal_error(client);
@@ -250,9 +249,10 @@ static void execute_cgi(int client, int content_length, const HTTP_REQUEST* requ
 		close(cgi_input[1]);
 
 		execl(request->path, request->path, request->method, request->query_string, NULL);
-		exit(EXIT_SUCCESS);
+		exit(EXIT_FAILURE); // a success execl will never return
 	}
 	/* parent */
+	char buf[1024];
 	close(cgi_output[1]);
 	close(cgi_input[0]);
 	if(request->method_type == POST) {
