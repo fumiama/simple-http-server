@@ -549,7 +549,7 @@ static int accept_client(int is_unix_sock) {
 		}
 		pthread_t accept_thread;
 		if(pthread_create(&accept_thread, &attr, &accept_request, client_sock) != 0) perror("pthread_create");
-		printf("Created new thread at 0x%p\n", (void*)accept_thread);
+		printf("Created new thread at %p\n", (void*)accept_thread);
 	}
 }
 
