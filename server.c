@@ -99,6 +99,12 @@ static void accept_request(void *cli) {
 		cgi = 1;
 		method_type = POST;
 	}
+	else {
+		unimplemented(client);
+		discard(client);
+		close(client);
+		return;
+	}
 
 	skipspace(buf, j, numchars - 1);
 	path = buf + j + 1;
@@ -121,11 +127,13 @@ static void accept_request(void *cli) {
 	path[0] = '.'; path[1] = '/';
 
 	printf("[%s] <%s> (%s) = ", getmethod(method_type), path, query_string);
-	// 花括号不可省略
-	if(stat(path, &st) == -1) {
-		discard(client);
-		not_found(client);
-	} else {
+	do {
+		// 花括号不可省略
+		if(stat(path, &st) == -1) {
+			not_found(client);
+			break;
+		}
+
 		int pathlen = strlen(path) + 1;
 		char path_stack[pathlen + 11];	// 11 is for possible /index.html
 		memcpy(path_stack, path, pathlen);
@@ -142,10 +150,8 @@ static void accept_request(void *cli) {
 			strcat(path, "/index.html");
 			// 花括号不可省略
 			if(stat(path, &st) == -1) {
-				discard(client);
 				not_found(client);
-				close(client);
-				return;
+				break;
 			}
 		}
 		int content_length = 0;
@@ -166,7 +172,9 @@ static void accept_request(void *cli) {
 			request.query_string = query_string;
 			execute_cgi(client, content_length, &request);
 		}
-	}
+	} while(0);
+
+	discard(client);
 	close(client);
 }
 
