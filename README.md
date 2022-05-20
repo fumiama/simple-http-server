@@ -70,4 +70,4 @@ Here is a CGI example [CMoe-Counter](https://github.com/fumiama/CMoe-Counter)
 
 And its realization is here:
 
-<div align=center> <a href="#"> <img src="http://sayuri.fumiama.top/cmoe?name=shttps&theme=gb" /> </a> </div>
+<div align=center> <a href="#"> <img src="http://cmoe.azurewebsites.net/cmoe?name=shttps&theme=gb" /> </a> </div>
