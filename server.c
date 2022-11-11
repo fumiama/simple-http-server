@@ -547,7 +547,7 @@ static int accept_client(int is_unix_sock) {
 			printf("Accept client %s:%u\n", str, port);
 		}
 		pthread_t accept_thread;
-		if(pthread_create(&accept_thread, &attr, &accept_request, client_sock) != 0) perror("pthread_create");
+		if(pthread_create(&accept_thread, &attr, &accept_request, (void*)(uintptr_t)client_sock) != 0) perror("pthread_create");
 		printf("Created new thread at %p\n", (void*)accept_thread);
 	}
 }
