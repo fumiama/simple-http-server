@@ -78,7 +78,7 @@ static void unimplemented(int);
 #define skipspace(buf, j, cap) while(ISspace(buf[j]) && (j < (cap))) j++
 #define getmethod(method_type) ((method_type == GET)?"GET":"POST")
 static void accept_request(void *cli) {
-	int client = (int)cli;
+	int client = (int)(uintptr_t)cli;
 	char buf[1024], *path, *query_string;
 	int numchars, cgi = 0, j; // cgi becomes true if server decides this is a CGI program
 	struct stat st;
@@ -547,7 +547,7 @@ static int accept_client(int is_unix_sock) {
 			printf("Accept client %s:%u\n", str, port);
 		}
 		pthread_t accept_thread;
-		if(pthread_create(&accept_thread, &attr, &accept_request, (void*)(uintptr_t)client_sock) != 0) perror("pthread_create");
+		if(pthread_create(&accept_thread, &attr, (void * (*)(void *))&accept_request, (void*)(uintptr_t)client_sock) != 0) perror("pthread_create");
 		printf("Created new thread at %p\n", (void*)accept_thread);
 	}
 }
