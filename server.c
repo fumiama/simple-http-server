@@ -60,8 +60,8 @@ static int headers(int, const char *);
 static void internal_error(int);
 static void not_found(int);
 static void serve_file(int, const char *);
-static int startup(u_int16_t *);
-static int startupunix(char *);
+static int startup(u_int16_t *, int);
+static int startupunix(char *, int);
 static void unimplemented(int);
 
 /**********************************************************************/
@@ -453,7 +453,7 @@ static void serve_file(int client, const char *filename) {
 	static struct sockaddr_in name;
 	static struct sockaddr_in client_name;
 #endif
-static int startup(uint16_t *port) {
+static int startup(uint16_t *port, int listen_queue_len) {
 	int httpd = 0;
 
 	#ifdef LISTEN_ON_IPV6
@@ -470,6 +470,12 @@ static int startup(uint16_t *port) {
 	#endif
 	if(httpd < 0) error_die("socket");
 
+	int on = 1;
+    if(setsockopt(httpd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on))) {
+        perror("Set socket option failure");
+        return 0;
+    }
+
 	if(bind(httpd,(struct sockaddr *)&name, struct_len) < 0) error_die("bind");
 	/* if dynamically allocating a port */
 	if(*port == 0) {
@@ -480,13 +486,13 @@ static int startup(uint16_t *port) {
 			*port = ntohs(name.sin_port);
 		#endif
 	}
-	if(listen(httpd, 5) < 0) error_die("listen");
+	if(listen(httpd, listen_queue_len) < 0) error_die("listen");
 
 	return httpd;
 }
 
 static struct sockaddr_un uname;
-static int startupunix(char *path) {
+static int startupunix(char *path, int listen_queue_len) {
 	int httpd = socket(AF_UNIX, SOCK_STREAM, 0);
 	if(httpd < 0) error_die("unix socket");
 
@@ -498,8 +504,13 @@ static int startupunix(char *path) {
 	#endif
 
 	unlink(path); // in case it already exists
+	int on = 1;
+    if(setsockopt(httpd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on))) {
+        perror("Set socket option failure");
+        return 0;
+    }
 	if(bind(httpd, (struct sockaddr *)&uname, SUN_LEN(&uname)) < 0) error_die("bind");
-	if(listen(httpd, 5) < 0) error_die("listen");
+	if(listen(httpd, listen_queue_len) < 0) error_die("listen");
 
 	return httpd;
 }
@@ -553,9 +564,10 @@ static int accept_client(int is_unix_sock) {
 }
 
 #define argequ(arg) (*(uint16_t*)argv[i] == *(uint16_t*)(arg))
-#define USAGE "Usage:\tsimple-http-server [-h] [-d] [-p <port|unix socket path>] [-r <rootdir>] [-u <uid>]\n   -h:\tdisplay this help.\n   -d:\trun as daemon.\n   -p:\tif not set, we will choose a random port.\n   -r:\thttp root dir.\n   -u:\trun as this uid."
+#define USAGE "Usage:\tsimple-http-server [-d] [-h] [-p <port|unix socket path>] [-q 16] [-r <rootdir>] [-u <uid>]\n   -d:\trun as daemon.\n   -h:\tdisplay this help.\n   -p:\tif not set, we will choose a random port.\n   -q: listen queue length (defalut is 16)\n   -r:\thttp root dir.\n   -u:\trun as this uid."
 int main(int argc, char **argv) {
 	int as_daemon = 0;
+	int queue_len = 16;
 	uint16_t port = 0;
 	char* socket_path = NULL;
 	char *cdir = "./";
@@ -569,17 +581,19 @@ int main(int argc, char **argv) {
 
 	for(int i = 1; i < argc; i++) {
 		if(!as_daemon && argequ("-d")) as_daemon = 1;
+		else if(argequ("-h"))  {
+			puts(USAGE);
+			exit(EXIT_SUCCESS);
+		}
 		else if(argequ("-p")) {
 			i++;
 			if(isdigit(argv[i][0])) port = (uint16_t)atoi(argv[i]);
 			else socket_path = argv[i];
 		}
+		else if(argequ("-q")) queue_len = atoi(argv[++i]);
 		else if(argequ("-r")) cdir = argv[++i];
 		else if(argequ("-u")) uid = atoi(argv[++i]);
-		else if(argequ("-h"))  {
-			puts(USAGE);
-			exit(EXIT_SUCCESS);
-		}
+		
 		else {
 			printf("unknown argument: %s\n", argv[i]);
 			puts(USAGE);
@@ -589,7 +603,7 @@ int main(int argc, char **argv) {
 
 	if(chdir(cdir)) error_die("chdir");
 
-	server_sock = (!port&&socket_path)?startupunix(socket_path):startup(&port);
+	server_sock = (!port&&socket_path)?startupunix(socket_path, queue_len):startup(&port, queue_len);
 	if(port) printf("httpd running on 0.0.0.0:%d at %s\n", port, cdir);
 	else printf("httpd running on %s at %s\n", socket_path, cdir);
 
