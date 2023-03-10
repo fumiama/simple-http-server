@@ -22,6 +22,7 @@ A necessary subset of `HTTP 1.0` with following options of request header being 
 ### Code
 - 200 OK
 - 400 BAD REQUEST
+- 403 Forbidden
 - 404 NOT FOUND
 - 500 Internal Server Error
 - 501 Method Not Implemented
@@ -46,12 +47,14 @@ make install
 
 ## Command line usage
 ```bash
-simple-http-server [-h] [-d] [-p <port|unix socket path>] [-r <rootdir>] [-u <uid>]
+simple-http-server [-d] [-h] [-n host.name.com:port] [-p <port|unix socket path>] [-q 16] [-r <rootdir>] [-u <uid>]
 ```
 
-- **-h**:  display this help.
 - **-d**:  run as daemon.
+- **-h**:  display this help.
+- **-n**:  check hostname and port.
 - **-p**:  if not set, we will choose a random port.
+- **-q**:  listen queue length (defalut is 16).
 - **-r**:  http root dir.
 - **-u**:  run as this uid.
 

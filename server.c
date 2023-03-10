@@ -48,11 +48,14 @@ typedef struct HTTP_REQUEST HTTP_REQUEST;
 
 static int server_sock = -1;
 
+static char* hostnameport;
+
 static void accept_request(void *);
 static void bad_request(int);
 static void cat(int, FILE *);
 static void error_die(const char *);
 static void execute_cgi(int, int, const HTTP_REQUEST*);
+static void forbidden(int);
 static uint32_t get_file_size(const char *, int);
 static int get_line(int, char *, int);
 static void handle_quit(int);
@@ -156,8 +159,14 @@ static void accept_request(void *cli) {
 		cgi &= ((st.st_mode & S_IXUSR) || (st.st_mode & S_IXGRP) || (st.st_mode & S_IXOTH));
 		while((numchars > 0) && strcmp("\n", buf)) {
 			numchars = get_line(client, buf, sizeof(buf));
-			if(!content_length && strcasestr(buf, "Content-Length: ")) {
+			if(!content_length && !strncasecmp(buf, "Content-Length: ", 16)) {
 				content_length = atoi(buf + 16);
+			}
+			else if(hostnameport && !strncasecmp(buf, "Host: ", 6)) {
+				if(strncasecmp(buf+6, hostnameport, strlen(hostnameport))) {
+					forbidden(client);
+					goto DISCARD_AND_CLOSE;
+				}
 			}
 		}
 		if(method_type == POST && content_length == -1) bad_request(client);
@@ -171,7 +180,7 @@ static void accept_request(void *cli) {
 			execute_cgi(client, content_length, &request);
 		}
 	} while(0);
-
+DISCARD_AND_CLOSE:
 	discard(client);
 	close(client);
 }
@@ -203,17 +212,7 @@ static void cat(int client, FILE *resource) {
 		rewind(resource);
 		sendfile(client, fileno(resource), &len, file_size);
 	#endif
-	printf("Sendfile: %u bytes.\n", (unsigned int)len);
-}
-
-/**********************************************************************/
-/* Inform the client that a CGI script could not be executed.
- * Parameter: the client socket descriptor. */
-/**********************************************************************/
-#define HTTP500 "HTTP/1.0 500 Internal Server Error\r\nContent-Type: text/html\r\n\r\n<P>Internal Server Error.\r\n"
-static void internal_error(int client) {
-	send(client, HTTP500, sizeof(HTTP500)-1, 0);
-	puts("500 Internal Server Error.");
+	// printf("Sendfile: %u bytes.\n", (unsigned int)len);
 }
 
 /**********************************************************************/
@@ -322,6 +321,17 @@ CGI_CLOSE:
 }
 
 /**********************************************************************/
+/* Inform the client that the server understood
+   the request but refuses to authorize it
+ * Parameters: client socket */
+/**********************************************************************/
+#define HTTP403 "HTTP/1.0 403 Forbidden\r\nContent-Type: text/html\r\n\r\n<P>Your access is not allowed.\r\n"
+static void forbidden(int client) {
+	send(client, HTTP403, sizeof(HTTP403)-1, 0);
+	puts("403 Forbidden.");
+}
+
+/**********************************************************************/
 /* Returns the size of a file. */
 /* Parameters: path of the file */
 /**********************************************************************/
@@ -407,6 +417,16 @@ static int headers(int client, const char *filepath) {
 		puts("200 OK.");
 		return 1;
 	} else return 0;
+}
+
+/**********************************************************************/
+/* Inform the client that a CGI script could not be executed.
+ * Parameter: the client socket descriptor. */
+/**********************************************************************/
+#define HTTP500 "HTTP/1.0 500 Internal Server Error\r\nContent-Type: text/html\r\n\r\n<P>Internal Server Error.\r\n"
+static void internal_error(int client) {
+	send(client, HTTP500, sizeof(HTTP500)-1, 0);
+	puts("500 Internal Server Error.");
 }
 
 /**********************************************************************/
@@ -559,12 +579,12 @@ static int accept_client(int is_unix_sock) {
 		}
 		pthread_t accept_thread;
 		if(pthread_create(&accept_thread, &attr, (void * (*)(void *))&accept_request, (void*)(uintptr_t)client_sock) != 0) perror("pthread_create");
-		printf("Created new thread at %p\n", (void*)accept_thread);
+		// printf("Created new thread at %p\n", (void*)accept_thread);
 	}
 }
 
 #define argequ(arg) (*(uint16_t*)argv[i] == *(uint16_t*)(arg))
-#define USAGE "Usage:\tsimple-http-server [-d] [-h] [-p <port|unix socket path>] [-q 16] [-r <rootdir>] [-u <uid>]\n   -d:\trun as daemon.\n   -h:\tdisplay this help.\n   -p:\tif not set, we will choose a random port.\n   -q: listen queue length (defalut is 16)\n   -r:\thttp root dir.\n   -u:\trun as this uid."
+#define USAGE "Usage:\tsimple-http-server [-d] [-h] [-n host.name.com:port] [-p <port|unix socket path>] [-q 16] [-r <rootdir>] [-u <uid>]\n   -d:\trun as daemon.\n   -h:\tdisplay this help.\n   -n:\tcheck hostname and port.\n   -p:\tif not set, we will choose a random port.\n   -q:\tlisten queue length (defalut is 16).\n   -r:\thttp root dir.\n   -u:\trun as this uid."
 int main(int argc, char **argv) {
 	int as_daemon = 0;
 	int queue_len = 16;
@@ -585,6 +605,7 @@ int main(int argc, char **argv) {
 			puts(USAGE);
 			exit(EXIT_SUCCESS);
 		}
+		else if(argequ("-n")) hostnameport = argv[++i];
 		else if(argequ("-p")) {
 			i++;
 			if(isdigit(argv[i][0])) port = (uint16_t)atoi(argv[i]);
