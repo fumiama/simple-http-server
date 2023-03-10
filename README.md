@@ -70,7 +70,7 @@ Here is a CGI example [CMoe-Counter](https://github.com/fumiama/CMoe-Counter)
 
 And its realization is here:
 
-<div align=center> <a href="#"> <img src="http://cmoe.azurewebsites.net/cmoe?name=shttps&theme=gb" /> </a> </div>
+<div align=center> <a href="#"> <img src="https://counter.seku.su/cmoe?name=shttps&theme=gb" /> </a> </div>
 
 ## Appendix
 ### 4096 Threads Pressure Test Video
