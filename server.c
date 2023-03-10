@@ -594,7 +594,7 @@ int main(int argc, char **argv) {
 	uid_t uid = -1;
 	int pid = -1;
 
-	if(argc > 8) {
+	if(argc > 1+1+1+2+2+2+2+2) {
 		puts(USAGE);
 		exit(EXIT_SUCCESS);
 	}
