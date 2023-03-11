@@ -156,19 +156,23 @@ static void accept_request(void *cli) {
 			}
 		}
 		int content_length = 0;
+		int host_chk_passed = !(uintptr_t)hostnameport;
 		cgi &= ((st.st_mode & S_IXUSR) || (st.st_mode & S_IXGRP) || (st.st_mode & S_IXOTH));
 		while((numchars > 0) && strcmp("\n", buf)) {
 			numchars = get_line(client, buf, sizeof(buf));
 			if(!content_length && !strncasecmp(buf, "Content-Length: ", 16)) {
 				content_length = atoi(buf + 16);
 			}
-			else if(hostnameport && !strncasecmp(buf, "Host: ", 6)) {
+			else if(!host_chk_passed && !strncasecmp(buf, "Host: ", 6)) {
 				if(strncasecmp(buf+6, hostnameport, strlen(hostnameport))) {
 					forbidden(client);
-					goto DISCARD_AND_CLOSE;
+					host_chk_passed = 0;
+					break;
 				}
+				host_chk_passed = 1;
 			}
 		}
+		if(!host_chk_passed) break;
 		if(method_type == POST && content_length == -1) bad_request(client);
 		else if(!cgi) serve_file(client, path);
 		else {
