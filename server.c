@@ -184,7 +184,6 @@ static void accept_request(void *cli) {
 			execute_cgi(client, content_length, &request);
 		}
 	} while(0);
-DISCARD_AND_CLOSE:
 	discard(client);
 	close(client);
 }
