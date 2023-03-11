@@ -6,7 +6,7 @@
 
 > Created November 1999 by J. David Blackstone.
 > 
-> Modified June 2021 by Fumiama(源文雨)
+> Optimized June 2021 by Fumiama(源文雨)
 
 ## Protocol
 A necessary subset of `HTTP 1.0` with following options of request header being supported.
