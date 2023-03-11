@@ -74,8 +74,8 @@ static void unimplemented(int);
 /**********************************************************************/
 
 /* read & discard headers */
-#define discard(client) \
-	while((numchars > 0) && strcmp("\n", buf)) numchars = get_line(client, buf, sizeof(buf))
+#define discard(client, numchars) \
+	while(numchars > 0 && buf[0] != '\n' && buf[0] != '\r') numchars = get_line(client, buf, sizeof(buf))
 #define methodequ(str, method) (*(uint32_t*)(method) == *(uint32_t*)(str))
 #define skiptext(buf, j, cap) while(!ISspace(buf[j]) && (j < (cap))) j++
 #define skipspace(buf, j, cap) while(ISspace(buf[j]) && (j < (cap))) j++
@@ -102,7 +102,7 @@ static void accept_request(void *cli) {
 	}
 	else {
 		unimplemented(client);
-		discard(client);
+		discard(client, numchars);
 		close(client);
 		return;
 	}
@@ -158,21 +158,27 @@ static void accept_request(void *cli) {
 		int content_length = 0;
 		int host_chk_passed = !(uintptr_t)hostnameport;
 		cgi &= ((st.st_mode & S_IXUSR) || (st.st_mode & S_IXGRP) || (st.st_mode & S_IXOTH));
-		while((numchars > 0) && strcmp("\n", buf)) {
+		while(numchars > 0) {
 			numchars = get_line(client, buf, sizeof(buf));
+			if(buf[0] == '\n' || buf[0] == '\r') {
+				numchars = 0;
+				break;
+			}
 			if(!content_length && !strncasecmp(buf, "Content-Length: ", 16)) {
 				content_length = atoi(buf + 16);
 			}
 			else if(!host_chk_passed && !strncasecmp(buf, "Host: ", 6)) {
 				if(strncasecmp(buf+6, hostnameport, strlen(hostnameport))) {
-					forbidden(client);
 					host_chk_passed = 0;
 					break;
 				}
 				host_chk_passed = 1;
 			}
 		}
-		if(!host_chk_passed) break;
+		if(!host_chk_passed) {
+			forbidden(client);
+			break;
+		}
 		if(method_type == POST && content_length == -1) bad_request(client);
 		else if(!cgi) serve_file(client, path);
 		else {
@@ -184,7 +190,7 @@ static void accept_request(void *cli) {
 			execute_cgi(client, content_length, &request);
 		}
 	} while(0);
-	discard(client);
+	discard(client, numchars);
 	close(client);
 }
 
