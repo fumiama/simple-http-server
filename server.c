@@ -4,7 +4,7 @@
  * CSE 4344(Network concepts), Prof. Zeigler
  * University of Texas at Arlington
  *
- * Modified June 2021 by Fumiama(源文雨)
+ * Optimized June 2021 by Fumiama(源文雨)
  */
 /* See feature_test_macros(7) */
 #define _GNU_SOURCE
@@ -33,18 +33,18 @@
 
 #define ISspace(x) isspace((int)(x))
 
-#define SERVER_STRING "Server: TinyHttpd modified by Fumiama/1.0\r\n"
+#define SERVER_STRING "Server: TinyHttpd optimized by Fumiama/1.0\r\n"
 
-enum METHOD_TYPE {GET, POST};
-typedef enum METHOD_TYPE METHOD_TYPE;
+enum method_type_enum_t {GET, POST};
+typedef enum method_type_enum_t method_type_enum_t;
 
-struct HTTP_REQUEST {
+struct http_request_t {
 	const char *path;
 	const char *method;
-	METHOD_TYPE method_type;
+	method_type_enum_t method_type;
 	const char *query_string;
 };
-typedef struct HTTP_REQUEST HTTP_REQUEST;
+typedef struct http_request_t http_request_t;
 
 static int server_sock = -1;
 
@@ -54,7 +54,7 @@ static void accept_request(void *);
 static void bad_request(int);
 static void cat(int, FILE *);
 static void error_die(const char *);
-static void execute_cgi(int, int, const HTTP_REQUEST*);
+static void execute_cgi(int, int, const http_request_t*);
 static void forbidden(int);
 static uint32_t get_file_size(const char *, int);
 static int get_line(int, char *, int);
@@ -85,7 +85,7 @@ static void accept_request(void *cli) {
 	char buf[1024], *path, *query_string;
 	int numchars, cgi = 0, j; // cgi becomes true if server decides this is a CGI program
 	struct stat st;
-	METHOD_TYPE method_type;
+	method_type_enum_t method_type;
 
 	signal(SIGQUIT, handle_quit);
 	signal(SIGPIPE, handle_quit);
@@ -176,7 +176,7 @@ static void accept_request(void *cli) {
 		if(method_type == POST && content_length == -1) bad_request(client);
 		else if(!cgi) serve_file(client, path);
 		else {
-			HTTP_REQUEST request;
+			http_request_t request;
 			request.path = path;
 			request.method = getmethod(method_type);
 			request.method_type = method_type;
@@ -235,7 +235,7 @@ static void error_die(const char *sc) {
  * Parameters: client socket descriptor
  *             path to the CGI script */
 /**********************************************************************/
-static void execute_cgi(int client, int content_length, const HTTP_REQUEST* request) {
+static void execute_cgi(int client, int content_length, const http_request_t* request) {
 	int cgi_output[2], cgi_input[2];
 	pid_t pid;
 
