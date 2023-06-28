@@ -87,9 +87,6 @@ static void accept_request(void *cli) {
 	struct stat st;
 	method_type_enum_t method_type;
 
-	signal(SIGQUIT, handle_quit);
-	signal(SIGPIPE, handle_quit);
-
 	numchars = get_line(client, buf, sizeof(buf));
 	j = 0;
 	skiptext(buf, j, numchars - 1);
@@ -561,9 +558,11 @@ static void unimplemented(int client) {
 /************************************************************************/
 static pthread_attr_t attr;
 static int accept_client(int is_unix_sock) {
+	signal(SIGCHLD, SIG_IGN);
+	signal(SIGQUIT, handle_quit);
+	signal(SIGPIPE, handle_quit);
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-	signal(SIGCHLD, SIG_IGN);
 	while(1) {
 		socklen_t client_name_len = sizeof(client_name);
 		int client_sock = accept(server_sock, (struct sockaddr *)(is_unix_sock?NULL:&client_name), is_unix_sock?NULL:&client_name_len);
