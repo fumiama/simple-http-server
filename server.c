@@ -247,8 +247,8 @@ static void execute_cgi(int client, int content_length, const http_request_t* re
 	}
 	/* child: CGI script */
 	if(pid == 0) {
-		dup2(cgi_output[1], 1);
-		dup2(cgi_input[0], 0);
+		dup2(cgi_output[1], STDOUT_FILENO);
+		dup2(cgi_input[0], STDIN_FILENO);
 		close(cgi_output[0]);
 		close(cgi_input[1]);
 
