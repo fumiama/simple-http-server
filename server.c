@@ -4,7 +4,7 @@
  * CSE 4344(Network concepts), Prof. Zeigler
  * University of Texas at Arlington
  *
- * Optimized June 2021 by Fumiama(源文雨)
+ * Optimized Dec 2023 by Fumiama(源文雨)
  */
 /* See feature_test_macros(7) */
 #define _GNU_SOURCE
@@ -41,8 +41,8 @@ typedef enum method_type_enum_t method_type_enum_t;
 struct http_request_t {
 	const char *path;
 	const char *method;
-	method_type_enum_t method_type;
 	const char *query_string;
+	method_type_enum_t method_type;
 };
 typedef struct http_request_t http_request_t;
 
@@ -52,18 +52,17 @@ static char* hostnameport;
 
 static void accept_request(void *);
 static void bad_request(int);
-static void cat(int, FILE *);
+static void cat(int, int, size_t);
 static void error_die(const char *);
-static void execute_cgi(int, int, const http_request_t*);
+static void execute_cgi(int, int, const http_request_t *);
 static void forbidden(int);
-static uint32_t get_file_size(const char *, int);
 static int get_line(int, char *, int);
 static void handle_quit(int);
-static int headers(int, const char *);
+static int headers(int, const char *, uint32_t);
 static void internal_error(int);
 static void not_found(int);
 static void serve_file(int, const char *);
-static int startup(u_int16_t *, int);
+static int startup(uint16_t *, int);
 static int startupunix(char *, int);
 static void unimplemented(int);
 
@@ -208,15 +207,12 @@ static void bad_request(int client) {
  * Parameters: the client socket descriptor
  *             FILE pointer for the file to cat */
 /**********************************************************************/
-static void cat(int client, FILE *resource) {
+static void cat(int client, int fd, size_t size) {
 	off_t len = 0;
 	#if __APPLE__
-		sendfile(fileno(resource), client, 0, &len, &hdtr, 0);
+		sendfile(fd, client, 0, &len, &hdtr, 0);
 	#else
-		fseek(resource, 0, SEEK_END);
-		off_t file_size = ftell(resource);
-		rewind(resource);
-		sendfile(client, fileno(resource), &len, file_size);
+		sendfile(client, fd, &len, size);
 	#endif
 	// printf("Sendfile: %u bytes.\n", (unsigned int)len);
 }
@@ -338,21 +334,6 @@ static void forbidden(int client) {
 }
 
 /**********************************************************************/
-/* Returns the size of a file. */
-/* Parameters: path of the file */
-/**********************************************************************/
-static uint32_t get_file_size(const char *filepath, int client) {
-	struct stat statbuf;
-	uint32_t sz;
-	if(!stat(filepath, &statbuf)) {
-		sz = statbuf.st_size;
-		printf("[%u] - ", sz);
-		return sz;
-	}
-	else return 0;
-}
-
-/**********************************************************************/
 /* Get a line from a socket, whether the line ends in a newline,
  * carriage return, or a CRLF combination.  Terminates the string read
  * with a null character.  If no newline indicator is found before the
@@ -410,19 +391,15 @@ static void handle_quit(int signo) {
 #define HTTP200 "HTTP/1.0 200 OK\r\n"
 #define CONTENT_TYPE "Content-Type: %s\r\n"
 #define CONTENT_LEN "Content-Length: %d\r\n"
-static int headers(int client, const char *filepath) {
+static int headers(int client, const char *filepath, uint32_t file_size) {
 	char buf[1024];
 	uint32_t offset = 0;
 	uint32_t extpos = strlen(filepath) - 4;
-	uint32_t file_size = get_file_size(filepath, client);
-	if(file_size) {
-		add_header(HTTP200 SERVER_STRING);
-		add_header_para(CONTENT_TYPE, extisnot("html")?(extisnot(".css")?(extisnot(".ico")?"text/plain":"image/x-icon"):"text/css"):"text/html");
-		add_header_para(CONTENT_LEN "\r\n", file_size);
-		send(client, buf, offset, 0);
-		puts("200 OK.");
-		return 1;
-	} else return 0;
+	add_header(HTTP200 SERVER_STRING);
+	add_header_para(CONTENT_TYPE, extisnot("html")?(extisnot(".css")?(extisnot(".ico")?"text/plain":"image/x-icon"):"text/css"):"text/html");
+	add_header_para(CONTENT_LEN "\r\n", file_size);
+	puts("200 OK.");
+	return send(client, buf, offset, 0);
 }
 
 /**********************************************************************/
@@ -452,14 +429,22 @@ static void not_found(int client) {
  *             the name of the file to serve */
 /**********************************************************************/
 static void serve_file(int client, const char *filename) {
-	FILE *resource = NULL;
-
-	resource = fopen(filename, "rb");
-	if(resource) {
-		if(headers(client, filename)) cat(client, resource);
-		else not_found(client);
-		fclose(resource);
-	} else not_found(client);
+	int fd = open(filename, O_RDONLY);
+	if(fd < 0) {
+		perror("open");
+		return not_found(client);
+	}
+	struct stat statbuf;
+	if(fstat(fd, &statbuf)) {
+		perror("fstat");
+		return not_found(client);
+	}
+	if(headers(client, filename, (uint32_t)statbuf.st_size) <= 0) {
+		perror("send");
+		return not_found(client);
+	}
+	cat(client, fd, (size_t)statbuf.st_size);
+	close(fd);
 }
 
 /**********************************************************************/
@@ -498,7 +483,7 @@ static int startup(uint16_t *port, int listen_queue_len) {
 
 	int on = 1;
     if(setsockopt(httpd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on))) {
-        perror("Set socket option failure");
+        perror("setsockopt");
         return 0;
     }
 
@@ -532,7 +517,7 @@ static int startupunix(char *path, int listen_queue_len) {
 	unlink(path); // in case it already exists
 	int on = 1;
     if(setsockopt(httpd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on))) {
-        perror("Set socket option failure");
+        perror("setsockopt");
         return 0;
     }
 	if(bind(httpd, (struct sockaddr *)&uname, SUN_LEN(&uname)) < 0) error_die("bind");
