@@ -1,8 +1,10 @@
 #ifndef _TCPOOL_H_
 #define _TCPOOL_H_
 
-/* See feature_test_macros(7) */
-#define _GNU_SOURCE 1
+#ifndef _GNU_SOURCE
+    /* See feature_test_macros(7) */
+    #define _GNU_SOURCE 1
+#endif
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <pthread.h>
@@ -14,6 +16,7 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/uio.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -101,6 +104,7 @@ static tcpool_thread_timer_t tcpool_timers[TCPOOL_THREADCNT];
     static socklen_t tcpool_struct_len = sizeof(struct sockaddr_in);
     static struct sockaddr_in tcpool_server_addr;
 #endif
+static struct sockaddr_un tcpool_server_uname;
 
 static pthread_attr_t __tcpool_thread_attr;
 static pthread_key_t __tcpool_pthread_key_index;
@@ -110,6 +114,7 @@ static void accept_action(tcpool_thread_timer_t *timer);
 static void accept_client(int fd);
 static void accept_timer(void *p);
 static int bind_server(uint16_t* port);
+static int bind_server_unix(char *path);
 static void cleanup_thread(tcpool_thread_timer_t* timer);
 static void handle_accept(void *accept_fd_p);
 static void handle_int(int signo);
@@ -117,7 +122,7 @@ static void handle_kill(int signo);
 static void handle_pipe(int signo);
 static void handle_quit(int signo);
 static void handle_segv(int signo);
-static int listen_socket(int fd);
+static int listen_socket(int fd, int listen_queue_len);
 
 static int bind_server(uint16_t* port) {
     #ifdef LISTEN_ON_IPV6
@@ -134,32 +139,71 @@ static int bind_server(uint16_t* port) {
     #endif
     int on = 1;
     if(setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on))) {
-        perror("Set socket option failure");
-        return 0;
+        perror("setsockopt");
+        return -1;
     }
-    if(!~bind(fd, (struct sockaddr *)&tcpool_server_addr, tcpool_struct_len)) {
-        perror("Bind server failure");
-        return 0;
+    if(bind(fd, (struct sockaddr *)&tcpool_server_addr, tcpool_struct_len) < 0) {
+        perror("bind");
+        return -2;
     }
+    /* if dynamically allocating a port */
+	if(*port == 0) {
+		if(getsockname(fd, (struct sockaddr *)&tcpool_server_addr, &tcpool_struct_len) < 0) {
+            perror("getsockname");
+            return -3;
+        }
+		#ifdef LISTEN_ON_IPV6
+			*port = ntohs(tcpool_server_addr.sin6_port);
+		#else
+			*port = ntohs(tcpool_server_addr.sin_port);
+		#endif
+	}
     #ifdef LISTEN_ON_IPV6
-        *port = ntohs(tcpool_server_addr.sin6_port);
         struct in6_addr in = tcpool_server_addr.sin6_addr;
         char str[INET6_ADDRSTRLEN];	// 46
         inet_ntop(AF_INET6, &in, str, sizeof(str));
+        printf("Bind server successfully on [%s]:%u\n", str, *port);
     #else
-        *port = ntohs(tcpool_server_addr.sin_port);
         struct in_addr in = tcpool_server_addr.sin_addr;
         char str[INET_ADDRSTRLEN];	// 16
         inet_ntop(AF_INET, &in, str, sizeof(str));
+        printf("Bind server successfully on %s:%u\n", str, *port);
     #endif
-    printf("Bind server successfully on %s:%u\n", str, *port);
     return fd;
 }
 
-static int listen_socket(int fd) {
-    if(!~listen(fd, TCPOOL_THREADCNT)) {
-        perror("Listen failed");
-        return 0;
+static int bind_server_unix(char *path) {
+	int httpd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if(httpd < 0) {
+        perror("socket(unix)");
+        return -1;
+    }
+	tcpool_server_uname.sun_family = AF_UNIX;
+	strncpy(tcpool_server_uname.sun_path, path, sizeof(tcpool_server_uname.sun_path));
+	tcpool_server_uname.sun_path[sizeof(tcpool_server_uname.sun_path)-1] = 0; // avoid overlap
+	#if __APPLE__
+		tcpool_server_uname.sun_len = strlen(tcpool_server_uname.sun_path);
+	#endif
+
+	unlink(path); // in case it already exists
+	int on = 1;
+    if(setsockopt(httpd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on))) {
+        perror("setsockopt(unix)");
+        return -2;
+    }
+	if(bind(httpd, (struct sockaddr *)&tcpool_server_uname, SUN_LEN(&tcpool_server_uname)) < 0) {
+        perror("bind(unix)");
+        return -3;
+    }
+    printf("Bind server successfully on %s\n", path);
+	return httpd;
+}
+
+static int listen_socket(int fd, int listen_queue_len) {
+    if(listen_queue_len <= 0) listen_queue_len = TCPOOL_THREADCNT;
+    if(listen(fd, listen_queue_len) < 0) {
+        perror("listen");
+        return -1;
     }
     puts("Listening...");
     return fd;
@@ -356,7 +400,7 @@ static void accept_client(int fd) {
         #endif
         int accept_fd;
         if((accept_fd=accept(fd, (struct sockaddr *)&client_addr, &tcpool_struct_len))<=0) {
-            perror("Accept client error");
+            perror("accept");
             continue;
         }
         pthread_rwlock_wrlock(&timer->mb);
@@ -392,7 +436,7 @@ static void accept_client(int fd) {
             pthread_cond_init(&timer->c, NULL);
             pthread_mutex_init(&timer->mc, NULL);
             if (pthread_create(&timer->thread, &__tcpool_thread_attr, (void* (*)(void*))&handle_accept, timer)) {
-                perror("Error creating thread");
+                perror("pthread_create(accept)");
                 cleanup_thread(timer);
                 putchar('\n');
                 continue;
@@ -407,7 +451,7 @@ static void accept_client(int fd) {
             pthread_mutex_init(&timer->tmc, NULL);
             timer->hastimerslept = 0;
             if (pthread_create(&timer->timerthread, &__tcpool_thread_attr, (void* (*)(void*))&accept_timer, timer)) {
-                perror("Error creating timer thread");
+                perror("pthread_create(timer)");
                 cleanup_thread(timer);
                 putchar('\n');
                 continue;

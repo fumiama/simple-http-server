@@ -46,18 +46,35 @@ struct http_request_t {
 };
 typedef struct http_request_t http_request_t;
 
-static int server_sock = -1;
-
 static char* hostnameport;
 
-static void accept_request(void *);
+#define TCPOOL_THREADCNT 32
+
+#define TCPOOL_THREAD_TIMER_T_SZ 65536
+
+#define SERVER_THREAD_BUFSZ ( \
+    TCPOOL_THREAD_TIMER_T_SZ    \
+    -TCPOOL_THREAD_TIMER_T_HEAD_SZ  \
+)
+
+#define TCPOOL_THREAD_CONTEXT   \
+    char data[SERVER_THREAD_BUFSZ]
+
+static volatile uintptr_t is_in_cgi[TCPOOL_THREADCNT];
+
+#define TCPOOL_TOUCH_TIMER_CONDITION (is_in_cgi[index])
+
+#define TCPOOL_CLEANUP_THREAD_ACTION(timer) \
+    is_in_cgi[timer->index] = 0;
+
+#include "tcpool.h"
+
 static void bad_request(int);
 static void cat(int, int, size_t);
 static void error_die(const char *);
-static void execute_cgi(int, int, const http_request_t *);
+static void execute_cgi(tcpool_thread_timer_t *, int, const http_request_t *);
 static void forbidden(int);
 static int get_line(int, char *, int);
-static void handle_quit(int);
 static int headers(int, const char *, uint32_t);
 static void internal_error(int);
 static void not_found(int);
@@ -73,40 +90,40 @@ static void unimplemented(int);
 /**********************************************************************/
 
 /* read & discard headers */
-#define discard(client, numchars) \
+#define discard(buf, client, numchars) \
 	while(numchars > 0 && buf[0] != '\n' && buf[0] != '\r') numchars = get_line(client, buf, sizeof(buf))
 #define methodequ(str, method) (*(uint32_t*)(method) == *(uint32_t*)(str))
 #define skiptext(buf, j, cap) while(!ISspace(buf[j]) && (j < (cap))) j++
 #define skipspace(buf, j, cap) while(ISspace(buf[j]) && (j < (cap))) j++
 #define getmethod(method_type) ((method_type == GET)?"GET":"POST")
-static void accept_request(void *cli) {
-	int client = (int)(uintptr_t)cli;
-	char buf[1024], *path, *query_string;
+static void accept_action(tcpool_thread_timer_t *p) {
+	int client = p->accept_fd;
+	char *path, *query_string;
 	int numchars, cgi = 0, j; // cgi becomes true if server decides this is a CGI program
 	struct stat st;
 	method_type_enum_t method_type;
 
-	numchars = get_line(client, buf, sizeof(buf));
+	numchars = get_line(client, p->data, sizeof(p->data));
 	j = 0;
-	skiptext(buf, j, numchars - 1);
-	buf[j] = '\0';
+	skiptext(p->data, j, numchars - 1);
+	p->data[j] = '\0';
 
-	if(methodequ(buf, "GET")) method_type = GET;
-	else if(methodequ(buf, "POST")) {
+	if(methodequ(p->data, "GET")) method_type = GET;
+	else if(methodequ(p->data, "POST")) {
 		cgi = 1;
 		method_type = POST;
 	}
 	else {
 		unimplemented(client);
-		discard(client, numchars);
+		discard(p->data, client, numchars);
 		close(client);
 		return;
 	}
 
-	skipspace(buf, j, numchars - 1);
-	path = buf + j + 1;
-	skiptext(buf, j, numchars - 1);
-	buf[j] = 0;
+	skipspace(p->data, j, numchars - 1);
+	path = p->data + j + 1;
+	skiptext(p->data, j, numchars - 1);
+	p->data[j] = 0;
 
 	if(method_type == GET) {
 		query_string = path;
@@ -155,16 +172,16 @@ static void accept_request(void *cli) {
 		int host_chk_passed = !(uintptr_t)hostnameport;
 		cgi &= ((st.st_mode & S_IXUSR) || (st.st_mode & S_IXGRP) || (st.st_mode & S_IXOTH));
 		while(numchars > 0) {
-			numchars = get_line(client, buf, sizeof(buf));
-			if(buf[0] == '\n' || buf[0] == '\r') {
+			numchars = get_line(client, p->data, sizeof(p->data));
+			if(p->data[0] == '\n' || p->data[0] == '\r') {
 				numchars = 0;
 				break;
 			}
-			if(!content_length && !strncasecmp(buf, "Content-Length: ", 16)) {
-				content_length = atoi(buf + 16);
+			if(!content_length && !strncasecmp(p->data, "Content-Length: ", 16)) {
+				content_length = atoi(p->data + 16);
 			}
-			else if(!host_chk_passed && !strncasecmp(buf, "Host: ", 6)) {
-				if(strncasecmp(buf+6, hostnameport, strlen(hostnameport))) {
+			else if(!host_chk_passed && !strncasecmp(p->data, "Host: ", 6)) {
+				if(strncasecmp(p->data+6, hostnameport, strlen(hostnameport))) {
 					host_chk_passed = 0;
 					break;
 				}
@@ -183,10 +200,10 @@ static void accept_request(void *cli) {
 			request.method = getmethod(method_type);
 			request.method_type = method_type;
 			request.query_string = query_string;
-			execute_cgi(client, content_length, &request);
+			execute_cgi(p, content_length, &request);
 		}
 	} while(0);
-	discard(client, numchars);
+	discard(p->data, client, numchars);
 	close(client);
 }
 
@@ -233,9 +250,10 @@ static void error_die(const char *sc) {
  * Parameters: client socket descriptor
  *             path to the CGI script */
 /**********************************************************************/
-static void execute_cgi(int client, int content_length, const http_request_t* request) {
+static void execute_cgi(tcpool_thread_timer_t *timer, int content_length, const http_request_t* request) {
 	int cgi_output[2], cgi_input[2];
 	pid_t pid;
+	int client = timer->accept_fd;
 
 	if(pipe(cgi_output) < 0 || pipe(cgi_input) < 0 || (pid = fork()) < 0) {
 		internal_error(client);
@@ -252,15 +270,15 @@ static void execute_cgi(int client, int content_length, const http_request_t* re
 		exit(EXIT_FAILURE); // a success execl will never return
 	}
 	/* parent */
-	char buf[1024];
+	is_in_cgi[timer->index] = 1;
 	close(cgi_output[1]);
 	close(cgi_input[0]);
 	if(request->method_type == POST) {
 		#if __APPLE__
 			for(int i = 0; i < content_length;) {
-				int cnt = recv(client, buf, 1024, 0);
+				int cnt = recv(client, timer->data, sizeof(timer->data), 0);
 				if(cnt > 0) {
-					write(cgi_input[1], buf, cnt);
+					write(cgi_input[1], timer->data, cnt);
 					i += cnt;
 				} else {
 					internal_error(client);
@@ -294,15 +312,15 @@ static void execute_cgi(int client, int content_length, const http_request_t* re
 	if(cnt > 0) {
 		int len = 0;
 		#if __APPLE__
-			int cap = (cnt>1024)?1024:cnt;
+			int cap = (cnt>sizeof(timer->data))?sizeof(timer->data):cnt;
 			while(len < cnt) {
-				int n = read(cgi_output[0], buf, cap);
+				int n = read(cgi_output[0], timer->data, cap);
 				if(n <= 0) {
 					internal_error(client);
 					goto CGI_CLOSE;
 				}
 				len += n;
-				send(client, buf, n, 0);
+				send(client, timer->data, n, 0);
 			}
 		#else
 			while(len < cnt) {
@@ -320,6 +338,7 @@ CGI_CLOSE:
 	close(cgi_output[0]);
 	close(cgi_input[1]);
 	waitpid(pid, NULL, 0);
+	is_in_cgi[timer->index] = 0;
 }
 
 /**********************************************************************/
@@ -366,14 +385,6 @@ static int get_line(int sock, char *buf, int size) {
 	buf[i] = '\0';
 
 	return i;
-}
-
-/**********************************************************************/
-/* Handle thread quit signal */
-/**********************************************************************/
-static void handle_quit(int signo) {
-	perror("accept_request");
-	pthread_exit(NULL);
 }
 
 /**********************************************************************/
@@ -455,74 +466,23 @@ static void serve_file(int client, const char *filename) {
  * Parameters: pointer to variable containing the port to connect on
  * Returns: the socket */
 /**********************************************************************/
-#ifdef LISTEN_ON_IPV6
-	static socklen_t struct_len = sizeof(struct sockaddr_in6);
-	static struct sockaddr_in6 name;
-	static struct sockaddr_in6 client_name;
-#else
-	static socklen_t struct_len = sizeof(struct sockaddr_in);
-	static struct sockaddr_in name;
-	static struct sockaddr_in client_name;
-#endif
 static int startup(uint16_t *port, int listen_queue_len) {
-	int httpd = 0;
-
-	#ifdef LISTEN_ON_IPV6
-		name.sin6_family = AF_INET6;
-		name.sin6_port = htons(*port);
-		bzero(&(name.sin6_addr), sizeof(name.sin6_addr));
-		httpd = socket(PF_INET6, SOCK_STREAM, 0);
-	#else
-		name.sin_family = AF_INET;
-		name.sin_port = htons(*port);
-		name.sin_addr.s_addr = INADDR_ANY;
-		bzero(&(name.sin_zero), 8);
-		httpd = socket(AF_INET, SOCK_STREAM, 0);
-	#endif
-	if(httpd < 0) error_die("socket");
-
-	int on = 1;
-    if(setsockopt(httpd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on))) {
-        perror("setsockopt");
-        return 0;
-    }
-
-	if(bind(httpd,(struct sockaddr *)&name, struct_len) < 0) error_die("bind");
-	/* if dynamically allocating a port */
-	if(*port == 0) {
-		if(getsockname(httpd,(struct sockaddr *)&name, &struct_len) == -1) error_die("getsockname");
-		#ifdef LISTEN_ON_IPV6
-			*port = ntohs(name.sin6_port);
-		#else
-			*port = ntohs(name.sin_port);
-		#endif
-	}
-	if(listen(httpd, listen_queue_len) < 0) error_die("listen");
-
+	int httpd = bind_server(port);
+	if(httpd < 0) exit(EXIT_FAILURE);
+	if(listen_socket(httpd, listen_queue_len) < 0) exit(EXIT_FAILURE);
 	return httpd;
 }
 
-static struct sockaddr_un uname;
+/**********************************************************************/
+/* This function starts the process of listening for web connections
+ * on a specified path.
+ * Parameters: the path to connect on
+ * Returns: the socket */
+/**********************************************************************/
 static int startupunix(char *path, int listen_queue_len) {
-	int httpd = socket(AF_UNIX, SOCK_STREAM, 0);
-	if(httpd < 0) error_die("unix socket");
-
-	uname.sun_family = AF_UNIX;
-	strncpy(uname.sun_path, path, sizeof(uname.sun_path));
-	uname.sun_path[sizeof(uname.sun_path)-1] = 0; // avoid overlap
-	#if __APPLE__
-		uname.sun_len = strlen(uname.sun_path);
-	#endif
-
-	unlink(path); // in case it already exists
-	int on = 1;
-    if(setsockopt(httpd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on))) {
-        perror("setsockopt");
-        return 0;
-    }
-	if(bind(httpd, (struct sockaddr *)&uname, SUN_LEN(&uname)) < 0) error_die("bind");
-	if(listen(httpd, listen_queue_len) < 0) error_die("listen");
-
+	int httpd = bind_server_unix(path);
+	if(httpd < 0) exit(EXIT_FAILURE);
+	if(listen_socket(httpd, listen_queue_len) < 0) exit(EXIT_FAILURE);
 	return httpd;
 }
 
@@ -535,45 +495,6 @@ static int startupunix(char *path, int listen_queue_len) {
 static void unimplemented(int client) {
 	send(client, HTTP501, sizeof(HTTP501)-1, 0);
 	puts("501 Method Not Implemented.");
-}
-
-/************************************************************************/
-/* simple-http-server
- * Usage: simple-http-server [-d] [-p <port>] [-r <rootdir>] [-u <uid>] */
-/************************************************************************/
-static pthread_attr_t attr;
-static int accept_client(int is_unix_sock) {
-	signal(SIGCHLD, SIG_IGN);
-	signal(SIGQUIT, handle_quit);
-	signal(SIGPIPE, handle_quit);
-    pthread_attr_init(&attr);
-    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-	while(1) {
-		socklen_t client_name_len = sizeof(client_name);
-		int client_sock = accept(server_sock, (struct sockaddr *)(is_unix_sock?NULL:&client_name), is_unix_sock?NULL:&client_name_len);
-		if(client_sock < 0) {
-			puts("Failed to accept a client, continue...");
-			continue;
-		}
-		if(is_unix_sock) puts("Accept client from unix sock");
-		else {
-			#ifdef LISTEN_ON_IPV6
-				uint16_t port = ntohs(client_name.sin6_port);
-				struct in6_addr in = client_name.sin6_addr;
-				char str[INET6_ADDRSTRLEN];	// 46
-				inet_ntop(AF_INET6, &in, str, sizeof(str));
-			#else
-				uint16_t port = ntohs(client_name.sin_port);
-				struct in_addr in = client_name.sin_addr;
-				char str[INET_ADDRSTRLEN];	// 16
-				inet_ntop(AF_INET, &in, str, sizeof(str));
-			#endif
-			printf("Accept client %s:%u\n", str, port);
-		}
-		pthread_t accept_thread;
-		if(pthread_create(&accept_thread, &attr, (void * (*)(void *))&accept_request, (void*)(uintptr_t)client_sock) != 0) perror("pthread_create");
-		// printf("Created new thread at %p\n", (void*)accept_thread);
-	}
 }
 
 #define argequ(arg) (*(uint16_t*)argv[i] == *(uint16_t*)(arg))
@@ -617,7 +538,9 @@ int main(int argc, char **argv) {
 
 	if(chdir(cdir)) error_die("chdir");
 
-	server_sock = (!port&&socket_path)?startupunix(socket_path, queue_len):startup(&port, queue_len);
+	if(as_daemon && daemon(1, 1) < 0) error_die("daemon");
+
+	int server_sock = (!port&&socket_path)?startupunix(socket_path, queue_len):startup(&port, queue_len);
 	if(port) printf("httpd running on 0.0.0.0:%d at %s\n", port, cdir);
 	else printf("httpd running on %s at %s\n", socket_path, cdir);
 
@@ -626,18 +549,8 @@ int main(int argc, char **argv) {
 		setgid(uid);
 	}
 
-	if(as_daemon) {
-		pid = fork();
-		if(pid == 0) pid = fork();
-		else return 0;
-
-		while(pid > 0) {      // 主进程监控子进程状态，如果子进程异常终止则重启之
-			wait(NULL);
-			puts("Server subprocess exited. Restart...");
-			pid = fork();
-		}
-
-		if(pid < 0) perror("fork");
-		else accept_client(!port);
-	} else accept_client(!port);
+	pthread_cleanup_push((void (*)(void*))&close, (void*)((long long)server_sock));
+	accept_client(server_sock);
+	pthread_cleanup_pop(1);
+	return 99;
 }
