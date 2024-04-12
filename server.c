@@ -140,7 +140,7 @@ static void accept_action(tcpool_thread_timer_t *p) {
 	path -= 2;
 	path[0] = '.'; path[1] = '/';
 
-	printf("[%s] <%s> (%s) = ", getmethod(method_type), path, query_string);
+	printf("[%s] p='%s' ?='%s' ", getmethod(method_type), path, query_string);
 	do {
 		// 花括号不可省略
 		if(stat(path, &st) == -1) {
@@ -151,14 +151,12 @@ static void accept_action(tcpool_thread_timer_t *p) {
 		int pathlen = strlen(path) + 1;
 		char path_stack[pathlen + 11];	// 11 is for possible /index.html
 		memcpy(path_stack, path, pathlen);
-		printf("<%d> ", pathlen);
 		path = path_stack;
 
 		int query_length = strlen(query_string) + 1;
 		char query_string_stack[query_length];
 		memcpy(query_string_stack, query_string, query_length);
 		query_string = query_string_stack;
-		printf("(%d) ", query_length);
 
 		if((st.st_mode & S_IFMT) == S_IFDIR) {
 			strcat(path, "/index.html");
@@ -170,7 +168,8 @@ static void accept_action(tcpool_thread_timer_t *p) {
 		}
 		int content_length = 0;
 		int host_chk_passed = !(uintptr_t)hostnameport;
-		cgi &= ((st.st_mode & S_IXUSR) || (st.st_mode & S_IXGRP) || (st.st_mode & S_IXOTH));
+		cgi |= ((st.st_mode & S_IXUSR) || (st.st_mode & S_IXGRP) || (st.st_mode & S_IXOTH));
+		if(cgi) printf("(CGI) ");
 		while(numchars > 0) {
 			numchars = get_line(client, p->data, sizeof(p->data));
 			if(p->data[0] == '\n' || p->data[0] == '\r') {
@@ -308,7 +307,7 @@ static void execute_cgi(tcpool_thread_timer_t *timer, int content_length, const 
 			goto CGI_CLOSE;
 		}
 	}
-	printf("CGI msg len: %u bytes.\n", cnt);
+	printf("read %u bytes from pipe, ", cnt);
 	if(cnt > 0) {
 		int len = 0;
 		#if __APPLE__
@@ -332,7 +331,7 @@ static void execute_cgi(tcpool_thread_timer_t *timer, int content_length, const 
 				len += delta;
 			}
 		#endif
-		printf("CGI send %d bytes\n", len);
+		printf("send %d bytes.\n", len);
 	}
 CGI_CLOSE:
 	close(cgi_output[0]);
