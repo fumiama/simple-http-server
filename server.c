@@ -82,7 +82,7 @@ static void serve_file(int, const char *);
 static int startup(uint16_t *, int);
 static int startupunix(char *, int);
 static void unimplemented(int);
-
+static void wait_pid_push(void*);
 /**********************************************************************/
 /* A request has caused a call to accept() on the server port to
  * return.  Process the request appropriately.
@@ -254,7 +254,18 @@ static void execute_cgi(tcpool_thread_timer_t *timer, int content_length, const 
 	pid_t pid;
 	int client = timer->accept_fd;
 
-	if(pipe(cgi_output) < 0 || pipe(cgi_input) < 0 || (pid = fork()) < 0) {
+	if(pipe(cgi_output) < 0) {
+		internal_error(client);
+		return;
+	}
+	if(pipe(cgi_input) < 0) {
+		close(cgi_output[0]); close(cgi_output[1]);
+		internal_error(client);
+		return;
+	}
+	if((pid = fork()) < 0) {
+		close(cgi_output[0]); close(cgi_output[1]);
+		close(cgi_input[0]); close(cgi_input[1]);
 		internal_error(client);
 		return;
 	}
@@ -268,6 +279,9 @@ static void execute_cgi(tcpool_thread_timer_t *timer, int content_length, const 
 		execl(request->path, request->path, request->method, request->query_string, NULL);
 		exit(EXIT_FAILURE); // a success execl will never return
 	}
+	pthread_cleanup_push((void (*)(void*))&close, cgi_output[0]);
+	pthread_cleanup_push((void (*)(void*))&close, cgi_input[1]);
+	pthread_cleanup_push((void (*)(void*))&wait_pid_push, pid);
 	/* parent */
 	is_in_cgi[timer->index] = 1;
 	close(cgi_output[1]);
@@ -334,9 +348,9 @@ static void execute_cgi(tcpool_thread_timer_t *timer, int content_length, const 
 		printf("send %d bytes.\n", len);
 	}
 CGI_CLOSE:
-	close(cgi_output[0]);
-	close(cgi_input[1]);
-	waitpid(pid, NULL, 0);
+	pthread_cleanup_pop(1);
+	pthread_cleanup_pop(1);
+	pthread_cleanup_pop(1);
 	is_in_cgi[timer->index] = 0;
 }
 
@@ -494,6 +508,10 @@ static int startupunix(char *path, int listen_queue_len) {
 static void unimplemented(int client) {
 	send(client, HTTP501, sizeof(HTTP501)-1, 0);
 	puts("501 Method Not Implemented.");
+}
+
+static void wait_pid_push(void* pid) {
+	waitpid((pid_t)((uintptr_t)pid), NULL, 0);
 }
 
 #define argequ(arg) (*(uint16_t*)argv[i] == *(uint16_t*)(arg))
