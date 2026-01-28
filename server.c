@@ -24,6 +24,7 @@
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <errno.h>
 
 #if !__APPLE__
 	#include <sys/sendfile.h> 
@@ -76,7 +77,7 @@ static void execute_cgi(tcpool_thread_timer_t *, int, const http_request_t *);
 static void forbidden(int);
 static int get_line(int, char *, int);
 static int headers(int, const char *, uint32_t);
-static void internal_error(int);
+static void internal_error(int, const char *, int);
 static void not_found(int);
 static void serve_file(int, const char *);
 static int startup(uint16_t *, int);
@@ -244,6 +245,19 @@ static void error_die(const char *sc) {
 	exit(1);
 }
 
+static void cgi_timeout_handler(int sig) {
+	puts("CGI kill alarm triggered.");
+	pthread_kill(pthread_self(), SIGQUIT);
+}
+static void reset_sigaction_push(void* old_sa_timeout) {
+	sigaction(SIGALRM, (const struct sigaction *)old_sa_timeout, NULL);
+}
+static void alarm_push(void* sec) {
+	alarm((unsigned int)(uintptr_t)sec);
+}
+static void clear_in_cgi_push(void* index) {
+	is_in_cgi[(uintptr_t)index] = 0;
+}
 /**********************************************************************/
 /* Execute a CGI script.  Will need to set environment variables as
  * appropriate.
@@ -255,19 +269,31 @@ static void execute_cgi(tcpool_thread_timer_t *timer, int content_length, const 
 	pid_t pid;
 	int client = timer->accept_fd;
 
+	// Set up timeout handler
+	struct sigaction sa_timeout, old_sa_timeout;
+	sa_timeout.sa_handler = cgi_timeout_handler;
+	sigemptyset(&sa_timeout.sa_mask);
+	sa_timeout.sa_flags = 0;
+	sigaction(SIGALRM, &sa_timeout, &old_sa_timeout);
+	pthread_cleanup_push(reset_sigaction_push, (void*)&old_sa_timeout);
+	alarm(30); // 30 seconds timeout for CGI execution
+	pthread_cleanup_push(alarm_push, 0);
+
 	if(pipe(cgi_output) < 0) {
-		internal_error(client);
+		internal_error(client, "pipe(cgi_output) failed", errno);
 		return;
 	}
 	if(pipe(cgi_input) < 0) {
+		int err = errno;
 		close(cgi_output[0]); close(cgi_output[1]);
-		internal_error(client);
+		internal_error(client, "pipe(cgi_input) failed", err);
 		return;
 	}
 	if((pid = fork()) < 0) {
+		int err = errno;
 		close(cgi_output[0]); close(cgi_output[1]);
 		close(cgi_input[0]); close(cgi_input[1]);
-		internal_error(client);
+		internal_error(client, "fork failed", err);
 		return;
 	}
 	/* child: CGI script */
@@ -277,16 +303,23 @@ static void execute_cgi(tcpool_thread_timer_t *timer, int content_length, const 
 		close(cgi_output[0]);
 		close(cgi_input[1]);
 
+		write(STDOUT_FILENO, "DONEPREP", 8);
+
 		execl(request->path, request->path, request->method, request->query_string, NULL);
-		exit(EXIT_FAILURE); // a success execl will never return
+		// execl failed, write error marker to pipe
+		uint32_t error_marker = 0xFFFFFFFF;
+		write(STDOUT_FILENO, &error_marker, sizeof(error_marker));
+		_exit(EXIT_FAILURE); // use _exit instead of exit to avoid flushing parent's buffers
 	}
 	pthread_cleanup_push((void (*)(void*))&close, (void*)(uintptr_t)cgi_output[0]);
 	pthread_cleanup_push((void (*)(void*))&close, (void*)(uintptr_t)cgi_input[1]);
 	pthread_cleanup_push((void (*)(void*))&wait_pid_push, (void*)(uintptr_t)pid);
+	pthread_cleanup_push(clear_in_cgi_push, (void*)(uintptr_t)timer->index);
 	/* parent */
 	is_in_cgi[timer->index] = 1;
 	close(cgi_output[1]);
 	close(cgi_input[0]);
+
 	if(request->method_type == POST) {
 		#if __APPLE__
 			for(int i = 0; i < content_length;) {
@@ -295,7 +328,7 @@ static void execute_cgi(tcpool_thread_timer_t *timer, int content_length, const 
 					write(cgi_input[1], timer->data, cnt);
 					i += cnt;
 				} else {
-					internal_error(client);
+					internal_error(client, "recv POST data failed", errno);
 					goto CGI_CLOSE;
 				}
 			}
@@ -304,7 +337,7 @@ static void execute_cgi(tcpool_thread_timer_t *timer, int content_length, const 
 			while(len < content_length) {
 				int delta = splice(client, NULL, cgi_input[1], NULL, content_length - len, SPLICE_F_GIFT);
 				if(delta <= 0) {
-					internal_error(client);
+					internal_error(client, "splice POST data failed", errno);
 					goto CGI_CLOSE;
 				}
 				len += delta;
@@ -312,15 +345,68 @@ static void execute_cgi(tcpool_thread_timer_t *timer, int content_length, const 
 		#endif
 	}
 
+	char buf[8];
+	read(cgi_output[0], buf, 8); // wait child finish prep
+
 	uint32_t cnt = 0;
 	char* p = (char*)&cnt;
 	while(p - (char*)&cnt < sizeof(uint32_t)) {
-		int offset = read(cgi_output[0], p, sizeof(uint32_t));
-		if(offset > 0) p += offset;
-		else {
-			internal_error(client);
+		// Check if thread is being cleaned up
+		if(!is_in_cgi[timer->index]) {
+			puts("CGI thread cleanup detected, abort read.");
 			goto CGI_CLOSE;
 		}
+
+		int offset = read(cgi_output[0], p, sizeof(uint32_t) - (p - (char*)&cnt));
+		if(offset > 0) {
+			p += offset;
+		}
+		else if(offset == 0) {
+			// EOF: CGI process closed the pipe without writing header
+			// Check if child process is still running
+			int status;
+			pid_t result = waitpid(pid, &status, WNOHANG);
+			if(result > 0) {
+				// Child has exited
+				if(WIFEXITED(status)) {
+					char msg[128];
+					snprintf(msg, sizeof(msg), "CGI process exited with code %d before writing data", WEXITSTATUS(status));
+					internal_error(client, msg, 0);
+				} else if(WIFSIGNALED(status)) {
+					char msg[128];
+					snprintf(msg, sizeof(msg), "CGI process killed by signal %d", WTERMSIG(status));
+					internal_error(client, msg, 0);
+				} else {
+					internal_error(client, "CGI process terminated abnormally", 0);
+				}
+			} else if(result < 0) {
+				// waitpid error
+				internal_error(client, "waitpid failed", errno);
+			} else {
+				// result == 0: child may have become zombie
+				internal_error(client, "CGI closed pipe, child status unavailable", 0);
+			}
+			goto CGI_CLOSE;
+		}
+		else {
+			// offset < 0: error occurred
+			if(errno == EINTR) {
+				// Interrupted by signal, retry
+				continue;
+			}
+			// Check if fd was closed due to thread cleanup
+			if(errno == EBADF && !is_in_cgi[timer->index]) {
+				puts("CGI thread cleanup in progress, fd closed.");
+				goto CGI_CLOSE;
+			}
+			internal_error(client, "read CGI header failed", errno);
+			goto CGI_CLOSE;
+		}
+	}
+	// Check for error marker from child
+	if(cnt == 0xFFFFFFFF) {
+		internal_error(client, "CGI script execution failed (execl error)", 0);
+		goto CGI_CLOSE;
 	}
 	printf("read %u bytes from pipe, ", cnt);
 	if(cnt > 0) {
@@ -328,9 +414,19 @@ static void execute_cgi(tcpool_thread_timer_t *timer, int content_length, const 
 		#if __APPLE__
 			int cap = (cnt>sizeof(timer->data))?sizeof(timer->data):cnt;
 			while(len < cnt) {
+				// Check if thread is being cleaned up
+				if(!is_in_cgi[timer->index]) {
+					puts("CGI thread cleanup detected during output read.");
+					goto CGI_CLOSE;
+				}
+				
 				int n = read(cgi_output[0], timer->data, cap);
 				if(n <= 0) {
-					internal_error(client);
+					if(n < 0 && errno == EBADF && !is_in_cgi[timer->index]) {
+						puts("CGI thread cleanup in progress.");
+						goto CGI_CLOSE;
+					}
+					internal_error(client, "read CGI output failed", errno);
 					goto CGI_CLOSE;
 				}
 				len += n;
@@ -338,9 +434,19 @@ static void execute_cgi(tcpool_thread_timer_t *timer, int content_length, const 
 			}
 		#else
 			while(len < cnt) {
+				// Check if thread is being cleaned up
+				if(!is_in_cgi[timer->index]) {
+					puts("CGI thread cleanup detected during splice.");
+					goto CGI_CLOSE;
+				}
+				
 				int delta = splice(cgi_output[0], NULL, client, NULL, cnt - len, SPLICE_F_GIFT);
 				if(delta <= 0) {
-					internal_error(client);
+					if(delta < 0 && errno == EBADF && !is_in_cgi[timer->index]) {
+						puts("CGI thread cleanup in progress.");
+						goto CGI_CLOSE;
+					}
+					internal_error(client, "splice CGI output failed", errno);
 					goto CGI_CLOSE;
 				}
 				len += delta;
@@ -352,7 +458,9 @@ CGI_CLOSE:
 	pthread_cleanup_pop(1);
 	pthread_cleanup_pop(1);
 	pthread_cleanup_pop(1);
-	is_in_cgi[timer->index] = 0;
+	pthread_cleanup_pop(1);
+	pthread_cleanup_pop(1);
+	pthread_cleanup_pop(1);
 }
 
 /**********************************************************************/
@@ -431,10 +539,27 @@ static int headers(int client, const char *filepath, uint32_t file_size) {
 /* Inform the client that a CGI script could not be executed.
  * Parameter: the client socket descriptor. */
 /**********************************************************************/
-#define HTTP500 "HTTP/1.0 500 Internal Server Error\r\nContent-Type: text/html\r\n\r\n<P>Internal Server Error.\r\n"
-static void internal_error(int client) {
-	send(client, HTTP500, sizeof(HTTP500)-1, 0);
-	puts("500 Internal Server Error.");
+static void internal_error(int client, const char *reason, int err) {
+	char buf[512];
+	int len;
+	if(err == 0) {
+		len = snprintf(buf, sizeof(buf), 
+			"HTTP/1.0 500 Internal Server Error\r\n"
+			"Content-Type: text/html\r\n\r\n"
+			"<HTML><TITLE>Internal Server Error</TITLE>\r\n"
+			"<BODY><P>Internal Server Error: %s\r\n</BODY></HTML>\r\n",
+			reason ? reason : "Unknown error");
+		printf("500 Internal Server Error: %s\n", reason ? reason : "Unknown error");
+	} else {
+		len = snprintf(buf, sizeof(buf), 
+			"HTTP/1.0 500 Internal Server Error\r\n"
+			"Content-Type: text/html\r\n\r\n"
+			"<HTML><TITLE>Internal Server Error</TITLE>\r\n"
+			"<BODY><P>Internal Server Error: %s: %s\r\n</BODY></HTML>\r\n",
+			reason ? reason : "Unknown error", strerror(err));
+		printf("500 Internal Server Error: %s: %s\n", reason ? reason : "Unknown error", strerror(err));
+	}
+	send(client, buf, len, 0);
 }
 
 /**********************************************************************/
@@ -539,9 +664,26 @@ static void wait_pid_push(void* pid) {
 
 	printf("Wait pid %d start.\n", p);
 	alarm(5);
-	waitpid(p, NULL, 0);
+	int status;
+	pid_t result = waitpid(p, &status, 0);
 	alarm(0);
-	printf("Wait pid %d finish.\n", p);
+	
+	if(result > 0) {
+		if(WIFEXITED(status)) {
+			int exit_code = WEXITSTATUS(status);
+			printf("Wait pid %d finish: exited with code %d.\n", p, exit_code);
+		} else if(WIFSIGNALED(status)) {
+			int sig = WTERMSIG(status);
+			printf("Wait pid %d finish: killed by signal %d (%s)%s.\n", 
+				p, sig, strsignal(sig), WCOREDUMP(status) ? " (core dumped)" : "");
+		} else {
+			printf("Wait pid %d finish: terminated abnormally.\n", p);
+		}
+	} else if(result < 0) {
+		printf("Wait pid %d failed: %s\n", p, strerror(errno));
+	} else {
+		printf("Wait pid %d finish: no status change.\n", p);
+	}
 
 	timeout_pid = 0;
 	sigaction(SIGALRM, &old_sa, NULL);

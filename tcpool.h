@@ -259,7 +259,7 @@ static void accept_timer(void *p) {
     uint32_t index = timer->index;
     pthread_t thread = timer->thread;
     uint8_t isbusy;
-    const time_t check_interval = TCPOOL_MAXWAITSEC / 4;
+    const time_t check_interval = (TCPOOL_MAXWAITSEC / 4) ? (TCPOOL_MAXWAITSEC / 4) : 1;
 
     sleep(check_interval);
     while(thread && !pthread_kill(thread, 0)) {
