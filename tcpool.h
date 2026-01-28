@@ -259,8 +259,9 @@ static void accept_timer(void *p) {
     uint32_t index = timer->index;
     pthread_t thread = timer->thread;
     uint8_t isbusy;
+    const time_t check_interval = TCPOOL_MAXWAITSEC / 4;
 
-    sleep(TCPOOL_MAXWAITSEC / 4);
+    sleep(check_interval);
     while(thread && !pthread_kill(thread, 0)) {
         pthread_rwlock_rdlock(&timer->mb);
         isbusy = timer->isbusy;
@@ -274,7 +275,7 @@ static void accept_timer(void *p) {
             timer->hastimerslept = 0;
             pthread_mutex_unlock(&timer->tmc);
             printf("Timer@%d wake up\n", timer->index);
-            sleep(TCPOOL_MAXWAITSEC / 4);
+            sleep(check_interval);
             thread = timer->thread;
         }
         if(TCPOOL_TOUCH_TIMER_CONDITION) tcpool_touch_timer(p);
@@ -289,7 +290,7 @@ static void accept_timer(void *p) {
             }
             break;
         }
-        sleep(TCPOOL_MAXWAITSEC / 4);
+        sleep(check_interval);
         thread = timer->thread;
     }
     goto TIMER_SLEEP;
@@ -353,8 +354,10 @@ static void handle_accept(void *p) {
         pthread_rwlock_unlock(&tcpool_timer_pointer_of(p)->mb);
 
         puts("Set thread status to idle");
-        pthread_cond_wait(&tcpool_timer_pointer_of(p)->c, &tcpool_timer_pointer_of(p)->mc);
-    
+        while(tcpool_timer_pointer_of(p)->isbusy == 0) {  // prevent fake wakeup
+            pthread_cond_wait(&tcpool_timer_pointer_of(p)->c, &tcpool_timer_pointer_of(p)->mc);
+        }
+
         pthread_mutex_unlock(&tcpool_timer_pointer_of(p)->mc);
         puts("Thread wakeup");
     }
@@ -379,20 +382,28 @@ static void accept_client(int fd) {
     pthread_key_create(&__tcpool_pthread_key_index, NULL);
     while(1) {
         int p = 0;
+        tcpool_thread_timer_t* timer = NULL;
+
         while(p < TCPOOL_THREADCNT) {
-            pthread_rwlock_rdlock(&tcpool_timers[p].mb);
-            if(!tcpool_timers[p].isbusy) break;
-            pthread_rwlock_unlock(&tcpool_timers[p].mb);
+            timer = &tcpool_timers[p];
+            pthread_rwlock_wrlock(&timer->mb);
+            if(!timer->isbusy) {
+                timer->isbusy = 1;
+                pthread_rwlock_unlock(&timer->mb);
+                break;
+            }
+            pthread_rwlock_unlock(&timer->mb);
+            timer = NULL;
             p++;
         }
-        if(p >= TCPOOL_THREADCNT) {
+
+        if(!timer) {
             puts("Max thread cnt exceeded");
             sleep(1);
             continue;
         }
+
         printf("Ready for accept on slot No.%d\n", p);
-        tcpool_thread_timer_t* timer = &tcpool_timers[p];
-        pthread_rwlock_unlock(&timer->mb);
         #ifdef LISTEN_ON_IPV6
             struct sockaddr_in6 client_addr;
         #else
@@ -401,6 +412,9 @@ static void accept_client(int fd) {
         int accept_fd;
         if((accept_fd=accept(fd, (struct sockaddr *)&client_addr, &tcpool_struct_len))<=0) {
             perror("accept");
+            pthread_rwlock_wrlock(&timer->mb);
+            timer->isbusy = 0;
+            pthread_rwlock_unlock(&timer->mb);
             continue;
         }
         pthread_rwlock_wrlock(&timer->mb);

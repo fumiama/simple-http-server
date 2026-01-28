@@ -98,7 +98,8 @@ static void wait_pid_push(void*);
 #define getmethod(method_type) ((method_type == GET)?"GET":"POST")
 static void accept_action(tcpool_thread_timer_t *p) {
 	int client = p->accept_fd;
-	char *path, *query_string;
+	char *path;
+	char *query_string = "";
 	int numchars, cgi = 0, j; // cgi becomes true if server decides this is a CGI program
 	struct stat st;
 	method_type_enum_t method_type;
@@ -166,7 +167,7 @@ static void accept_action(tcpool_thread_timer_t *p) {
 				break;
 			}
 		}
-		int content_length = 0;
+		int content_length = -1;
 		int host_chk_passed = !(uintptr_t)hostnameport;
 		cgi |= ((st.st_mode & S_IXUSR) || (st.st_mode & S_IXGRP) || (st.st_mode & S_IXOTH));
 		if(cgi) printf("(CGI) ");
@@ -176,7 +177,7 @@ static void accept_action(tcpool_thread_timer_t *p) {
 				numchars = 0;
 				break;
 			}
-			if(!content_length && !strncasecmp(p->data, "Content-Length: ", 16)) {
+			if(!~content_length && !strncasecmp(p->data, "Content-Length: ", 16)) {
 				content_length = atoi(p->data + 16);
 			}
 			else if(!host_chk_passed && !strncasecmp(p->data, "Host: ", 6)) {
@@ -279,9 +280,9 @@ static void execute_cgi(tcpool_thread_timer_t *timer, int content_length, const 
 		execl(request->path, request->path, request->method, request->query_string, NULL);
 		exit(EXIT_FAILURE); // a success execl will never return
 	}
-	pthread_cleanup_push((void (*)(void*))&close, cgi_output[0]);
-	pthread_cleanup_push((void (*)(void*))&close, cgi_input[1]);
-	pthread_cleanup_push((void (*)(void*))&wait_pid_push, pid);
+	pthread_cleanup_push((void (*)(void*))&close, (void*)(uintptr_t)cgi_output[0]);
+	pthread_cleanup_push((void (*)(void*))&close, (void*)(uintptr_t)cgi_input[1]);
+	pthread_cleanup_push((void (*)(void*))&wait_pid_push, (void*)(uintptr_t)pid);
 	/* parent */
 	is_in_cgi[timer->index] = 1;
 	close(cgi_output[1]);
@@ -510,8 +511,40 @@ static void unimplemented(int client) {
 	puts("501 Method Not Implemented.");
 }
 
+#if __STDC_VERSION__ >= 201112L
+	static _Thread_local pid_t timeout_pid = 0;
+#else
+	static __thread pid_t timeout_pid = 0;
+#endif
+
+static void alarm_handler(int sig) {
+	pid_t p = timeout_pid;
+	timeout_pid = 0;
+	if(p > 0) {
+		printf("Wait pid %d > 5s, kill it.\n", p);
+		kill(p, SIGKILL);
+		timeout_pid = 0;
+	}
+}
+
 static void wait_pid_push(void* pid) {
-	waitpid((pid_t)((uintptr_t)pid), NULL, 0);
+	pid_t p = (pid_t)((uintptr_t)pid);
+	timeout_pid = p;
+
+	struct sigaction sa, old_sa;
+	sa.sa_handler = alarm_handler;
+	sigemptyset(&sa.sa_mask);
+	sa.sa_flags = 0;
+	sigaction(SIGALRM, &sa, &old_sa);
+
+	printf("Wait pid %d start.\n", p);
+	alarm(5);
+	waitpid(p, NULL, 0);
+	alarm(0);
+	printf("Wait pid %d finish.\n", p);
+
+	timeout_pid = 0;
+	sigaction(SIGALRM, &old_sa, NULL);
 }
 
 #define argequ(arg) (*(uint16_t*)argv[i] == *(uint16_t*)(arg))

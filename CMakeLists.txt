@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 2.6)
+cmake_minimum_required(VERSION 2.6...4.1.1)
 project(simple-http-server C)
 SET(CMAKE_BUILD_TYPE "Release")
 
