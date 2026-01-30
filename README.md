@@ -67,7 +67,7 @@ argv[1] = method; //request method (GET/POST)
 argv[2] = query_string;   //the query string, like "a=1&b=2&c=3"
 ```
 
-The server will read a `4 bytes` unsigned integer from pipe, indicating the `length` of the remaining content. Then it will send `length` bytes of data to the client directly with nothing being decorated, which means that you need to assemble the HTTP header by yourself.
+The server will read a `4 bytes` unsigned integer from pipe, indicating the `length` of the remaining content. Then it will send `length` bytes of data to the client directly with nothing being decorated, which means that you need to assemble the HTTP header by yourself. After all writings, please wait the server write `CGIFINRECV` to your `stdin`, showing that the server has read all data you send, then it is safe to exit.
 
 Here is a CGI example [CMoe-Counter](https://github.com/fumiama/CMoe-Counter)
 

@@ -20,6 +20,7 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#include <execinfo.h>
 
 #ifndef TCPOOL_THREAD_TIMER_T_SZ
     #define TCPOOL_THREAD_TIMER_T_SZ 1024
@@ -245,13 +246,16 @@ static void handle_int(int signo) {
 
 static void handle_pipe(int signo) {
     uint32_t index = (uint32_t)((uintptr_t)pthread_getspecific(__tcpool_pthread_key_index));
-    printf("Pipe error@%d, break loop...\n", index-1);
+    printf("Pipe error@%d, break loop... (tid=%lu)\n", index-1, (unsigned long)pthread_self());
+    void *bt[32];
+    int bt_size = backtrace(bt, 32);
+    backtrace_symbols_fd(bt, bt_size, fileno(stderr));
     fflush(stdout);
     if(index) {
         sigaction(SIGPIPE, &(const struct sigaction){handle_pipe}, NULL);
         siglongjmp(__tcpool_jmp2convend[index-1], signo);
     }
-    else pthread_exit(NULL);
+    exit(signo);
 }
 
 static void accept_timer(void *p) {
@@ -261,6 +265,7 @@ static void accept_timer(void *p) {
     uint8_t isbusy;
     const time_t check_interval = (TCPOOL_MAXWAITSEC / 4) ? (TCPOOL_MAXWAITSEC / 4) : 1;
 
+    printf("Timer thread started for slot %d (tid=%lu)\n", index, (unsigned long)pthread_self());
     sleep(check_interval);
     while(thread && !pthread_kill(thread, 0)) {
         pthread_rwlock_rdlock(&timer->mb);
@@ -270,11 +275,11 @@ static void accept_timer(void *p) {
         TIMER_SLEEP:
             pthread_mutex_lock(&timer->tmc);
             timer->hastimerslept = 1;
-            printf("Timer@%d sleep\n", timer->index);
+            printf("Timer@%d sleep (tid=%lu)\n", timer->index, (unsigned long)pthread_self());
             pthread_cond_wait(&timer->tc, &timer->tmc);
             timer->hastimerslept = 0;
             pthread_mutex_unlock(&timer->tmc);
-            printf("Timer@%d wake up\n", timer->index);
+            printf("Timer@%d wake up (tid=%lu)\n", timer->index, (unsigned long)pthread_self());
             sleep(check_interval);
             thread = timer->thread;
         }
@@ -282,17 +287,22 @@ static void accept_timer(void *p) {
         pthread_rwlock_rdlock(&timer->mt);
         time_t waitsec = time(NULL) - timer->touch;
         pthread_rwlock_unlock(&timer->mt);
-        printf("Wait@%d sec: %u, max: %u\n", timer->index, (unsigned int)waitsec, TCPOOL_MAXWAITSEC);
+        printf("Wait@%d sec: %u, max: %u (tid=%lu)\n", timer->index, (unsigned int)waitsec, TCPOOL_MAXWAITSEC, (unsigned long)pthread_self());
         if(waitsec > TCPOOL_MAXWAITSEC) {
-            if(thread) {
+            pthread_rwlock_rdlock(&timer->mb);
+            isbusy = timer->isbusy;
+            pthread_rwlock_unlock(&timer->mb);
+            
+            if(thread && isbusy && !pthread_kill(thread, 0)) {
                 pthread_kill(thread, SIGQUIT);
-                printf("Kill thread@%d\n", timer->index);
+                printf("Kill thread@%d (tid=%lu)\n", timer->index, (unsigned long)pthread_self());
             }
             break;
         }
         sleep(check_interval);
         thread = timer->thread;
     }
+    printf("Timer@%d going to sleep after loop (tid=%lu)\n", timer->index, (unsigned long)pthread_self());
     goto TIMER_SLEEP;
 }
 
@@ -354,9 +364,7 @@ static void handle_accept(void *p) {
         pthread_rwlock_unlock(&tcpool_timer_pointer_of(p)->mb);
 
         puts("Set thread status to idle");
-        while(tcpool_timer_pointer_of(p)->isbusy == 0) {  // prevent fake wakeup
-            pthread_cond_wait(&tcpool_timer_pointer_of(p)->c, &tcpool_timer_pointer_of(p)->mc);
-        }
+        pthread_cond_wait(&tcpool_timer_pointer_of(p)->c, &tcpool_timer_pointer_of(p)->mc);
 
         pthread_mutex_unlock(&tcpool_timer_pointer_of(p)->mc);
         puts("Thread wakeup");
@@ -410,8 +418,10 @@ static void accept_client(int fd) {
             struct sockaddr_in client_addr;
         #endif
         int accept_fd;
+    RE_ACCEPT:
         if((accept_fd=accept(fd, (struct sockaddr *)&client_addr, &tcpool_struct_len))<=0) {
             perror("accept");
+            if (errno == EINTR) goto RE_ACCEPT;
             pthread_rwlock_wrlock(&timer->mb);
             timer->isbusy = 0;
             pthread_rwlock_unlock(&timer->mb);

@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 2.6...4.1.1)
 project(simple-http-server C)
-SET(CMAKE_BUILD_TYPE "Release")
+IF(NOT CMAKE_BUILD_TYPE)
+    SET(CMAKE_BUILD_TYPE "Release")
+ENDIF()
 
 add_definitions(-DLISTEN_ON_IPV6)
 IF(CMAKE_SIZEOF_VOID_P EQUAL 8)
